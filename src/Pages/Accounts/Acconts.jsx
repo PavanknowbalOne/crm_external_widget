@@ -99,12 +99,6 @@ function Acconts() {
       candidate.Name1 && typeof candidate.Name1 === "object"
         ? candidate.Name1
         : null;
-    const compositeName = nameField
-      ? [nameField.first_name, nameField.last_name]
-          .filter(Boolean)
-          .join(" ")
-          .trim()
-      : "";
     const fallbackId = getAgentOptionId(candidate);
     return (
       candidate.__optionLabel ??
@@ -114,6 +108,7 @@ function Acconts() {
       candidate.full_name ??
       nameField?.zc_display_value ??
       nameField?.full_name ??
+      // compositeName ||
       candidate.Name ??
       candidate.name ??
       candidate.User_Name ??
