@@ -102,7 +102,7 @@ export const getInitialCreateFormData = () => ({
   Request_Note: "",
   Payment_Request_ID: "",
   Agent: null,
-  Requested_Agent_ID: "",
+  Agent_ID: "",
 });
 
 export const normalizeRecordId = (value) => {

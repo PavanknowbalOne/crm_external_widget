@@ -1,4 +1,3 @@
-/* global ZOHO */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import PaymentRequestsSection from "./components/PaymentRequestsSection";
 import PaymentRequestModal from "./components/PaymentRequestModal";
@@ -15,7 +14,7 @@ import {
 function Acconts() {
   const [paymentRequests, setPaymentRequests] = useState([]);
   const [paymentReceipts, setPaymentReceipts] = useState([]);
-  const [paymentUtilization, setUtilization] = useState([]);
+  const [, setUtilization] = useState([]);
   const zohoInitPromiseRef = useRef(null);
   const zohoSdkPromiseRef = useRef(null);
   const [isRequestFormOpen, setRequestFormOpen] = useState(false);
@@ -101,8 +100,12 @@ function Acconts() {
         ? candidate.Name1
         : null;
     const compositeName = nameField
-      ? [nameField.first_name, nameField.last_name].filter(Boolean).join(" ")
+      ? [nameField.first_name, nameField.last_name]
+          .filter(Boolean)
+          .join(" ")
+          .trim()
       : "";
+    const fallbackId = getAgentOptionId(candidate);
     return (
       candidate.__optionLabel ??
       candidate.zc_display_value ??
@@ -111,14 +114,13 @@ function Acconts() {
       candidate.full_name ??
       nameField?.zc_display_value ??
       nameField?.full_name ??
-      // compositeName ||
       candidate.Name ??
       candidate.name ??
       candidate.User_Name ??
       candidate.user_name ??
       candidate.Email ??
       candidate.email ??
-      `User `
+      `User ${fallbackId || ""}`.trim()
     );
   };
 
@@ -158,13 +160,15 @@ function Acconts() {
     if (!record) {
       return null;
     }
-    const normalizedAgent = normalizeAgentRecord(
-      record.Agent || record.Requested_Agent_ID
-    );
+    const agentSource = record.Agent || record.Agent_ID;
+    const normalizedAgent = normalizeAgentRecord(agentSource);
     return {
       ...record,
       Agent: normalizedAgent,
-      Requested_Agent_ID: normalizedAgent?.__optionId || "",
+      Agent_ID:
+        normalizedAgent?.__optionId ||
+        normalizeRecordId(record.Agent_ID) ||
+        "",
     };
   };
 
@@ -181,8 +185,7 @@ function Acconts() {
       missing.push("Requested Amount");
     }
     const agentId =
-      formData?.Requested_Agent_ID ||
-      getAgentOptionId(formData?.Agent);
+      formData?.Agent_ID || getAgentOptionId(formData?.Agent);
     if (!agentId) {
       missing.push("Requested Agent");
     }
@@ -360,34 +363,6 @@ function Acconts() {
     () => sumReceiptAmounts(expandedPaymentReceipts),
     [expandedPaymentReceipts]
   );
-
-  const logAvailableZohoApis = () => {
-    const namespaces = [
-      { label: "window.ZOHO", ref: window.ZOHO },
-      { label: "window.ZOHO.CREATOR", ref: window.ZOHO?.CREATOR },
-      { label: "window.ZOHO.CREATOR.API", ref: window.ZOHO?.CREATOR?.API },
-      { label: "window.ZOHO.CreatorSDK", ref: window.ZOHO?.CreatorSDK },
-      { label: "window.ZOHO.CreatorSDK.API", ref: window.ZOHO?.CreatorSDK?.API },
-      { label: "window.ZCAPI", ref: window.ZCAPI },
-      { label: "window.ZCAPI.API", ref: window.ZCAPI?.API },
-    ];
-    console.groupCollapsed("Zoho API availability debug");
-    namespaces.forEach(({ label, ref }) => {
-      if (!ref) {
-        console.log(`${label}: undefined`);
-      } else {
-        const candidateMethods = Object.keys(ref).filter((key) =>
-          ["update", "updateRecord", "editRecord"].includes(key)
-        );
-        console.log(`${label}:`, {
-          type: typeof ref,
-          keys: Object.keys(ref).slice(0, 10),
-          candidateMethods,
-        });
-      }
-    });
-    console.groupEnd();
-  };
 
   const loadZohoSdk = () => {
     if (window.ZOHO?.CREATOR) {
@@ -606,7 +581,7 @@ function Acconts() {
         return {
           ...prev,
           Agent: normalizedAgent,
-          Requested_Agent_ID: normalizedAgent?.__optionId || "",
+          Agent_ID: normalizedAgent?.__optionId || "",
         };
       }
       return {
@@ -651,8 +626,8 @@ function Acconts() {
       const normalizedRequestDate = formatDateForZoho(
         requestFormData.Request_Date
       );
-      const requestedAgentId =
-        requestFormData.Requested_Agent_ID ||
+      const agentId =
+        requestFormData.Agent_ID ||
         getAgentOptionId(requestFormData.Agent);
       const data = {
         Request_Date: normalizedRequestDate,
@@ -662,8 +637,8 @@ function Acconts() {
         Request_Note: requestFormData.Request_Note,
         Payment_Status: requestFormData.Payment_Status,
       };
-      if (requestedAgentId) {
-        data.Agent = requestedAgentId;
+      if (agentId) {
+        data.Agent = agentId;
       }
       const updateConfig = {
         app_name: appName,
@@ -686,9 +661,7 @@ function Acconts() {
       }
       setRequestSaveStatus("success");
       const normalizedAgentSelection = normalizeAgentRecord(
-        requestFormData.Agent ||
-          requestFormData.Requested_Agent_ID ||
-          requestedAgentId
+        requestFormData.Agent || requestFormData.Agent_ID || agentId
       );
       setPaymentRequests((prev) =>
         prev.map((item) =>
@@ -698,7 +671,7 @@ function Acconts() {
                 ...requestFormData,
                 Request_Date: normalizedRequestDate,
                 Agent: normalizedAgentSelection,
-                Requested_Agent_ID: normalizedAgentSelection?.__optionId || "",
+                Agent_ID: normalizedAgentSelection?.__optionId || "",
               }
             : item
         )
@@ -710,7 +683,7 @@ function Acconts() {
               ...requestFormData,
               Request_Date: normalizedRequestDate,
               Agent: normalizedAgentSelection,
-              Requested_Agent_ID: normalizedAgentSelection?.__optionId || "",
+              Agent_ID: normalizedAgentSelection?.__optionId || "",
             }
           : prev
       );
@@ -719,7 +692,7 @@ function Acconts() {
           ? {
               ...prev,
               Agent: normalizedAgentSelection,
-              Requested_Agent_ID: normalizedAgentSelection?.__optionId || "",
+              Agent_ID: normalizedAgentSelection?.__optionId || "",
             }
           : prev
       );
@@ -753,7 +726,7 @@ function Acconts() {
         return {
           ...base,
           Agent: normalizedAgent,
-          Requested_Agent_ID: normalizedAgent?.__optionId || "",
+          Agent_ID: normalizedAgent?.__optionId || "",
         };
       }
       return {
@@ -782,8 +755,8 @@ function Acconts() {
         throw new Error("Zoho add API is not available.");
       }
       const appName = getAppLinkName() || "knowbal-one";
-      const requestedAgentId =
-        createFormData.Agent ||
+      const agentId =
+        createFormData.Agent_ID ||
         getAgentOptionId(createFormData.Agent);
       const data = {
         Request_Date: formatDateForZoho(createFormData.Request_Date),
@@ -793,8 +766,8 @@ function Acconts() {
         Request_Note: createFormData.Request_Note,
         Payment_Status: createFormData.Payment_Status,
       };
-      if (requestedAgentId) {
-        data.Agent = requestedAgentId;
+      if (agentId) {
+        data.Agent = agentId;
       }
       const createConfig = {
         app_name: appName,
@@ -816,9 +789,7 @@ function Acconts() {
       }
       setCreateSaveStatus("success");
       const normalizedAgentSelection = normalizeAgentRecord(
-        createFormData.Agent ||
-          createFormData.Requested_Agent_ID ||
-          requestedAgentId
+        createFormData.Agent || createFormData.Agent_ID || agentId
       );
       const createdRecord = prepareRequestRecord({
         ...createFormData,
@@ -838,8 +809,6 @@ function Acconts() {
   };
 
   const openReceiptForm = (request) => {
-    console.log(request);
-    
     if (!request) return;
     const todayIso = new Date().toISOString().slice(0, 10);
     setActiveReceiptRequest(request);
@@ -1097,8 +1066,6 @@ function Acconts() {
 
     useEffect(() => {
       const initWidget = async () => {
-    
-        // PRODUCTION LOGIC
         try {
           const creator = await ensureZohoReady();
         
@@ -1106,26 +1073,14 @@ function Acconts() {
           if (!dataModule?.getRecords) {
             throw new Error("Zoho DATA.getRecords API unavailable.");
           }
-          const PaymentrequestResponse = await dataModule.getRecords({
+          const paymentRequestResponse = await dataModule.getRecords({
             report_name: PAYMENT_REQUEST_REPORT_NAME,
           });
-          if (PaymentrequestResponse && PaymentrequestResponse.data) {
-            const preparedRequests = PaymentrequestResponse.data
-              .map((record) => prepareRequestRecord(record) || record)
-              .map((record, index) => {
-                if (record.Agent && !record.Requested_Agent_ID) {
-                  return {
-                    ...record,
-                    Requested_Agent_ID: getAgentOptionId(record.Agent),
-                  };
-                }
-                return record;
-              });
-            setPaymentRequests(preparedRequests);
-            console.log(
-              "PaymentrequestResponse",
-              PaymentrequestResponse
+          if (paymentRequestResponse && paymentRequestResponse.data) {
+            const preparedRequests = paymentRequestResponse.data.map(
+              (record) => prepareRequestRecord(record) || record
             );
+            setPaymentRequests(preparedRequests);
           }
 
           const PaymentreceiptResponse = await dataModule.getRecords({
@@ -1151,10 +1106,6 @@ function Acconts() {
           const usersResponse = await dataModule.getRecords({
             report_name: USERS_REPORT_NAME,
           });
-           console.log(
-              "usersResponse",
-              usersResponse
-            ); 
           if (usersResponse && usersResponse.data) {
             const seenUserIds = new Set();
             const normalizedUsers = [];
@@ -1179,7 +1130,7 @@ function Acconts() {
       };
       window.addEventListener("resize", handleResize);
       return () => window.removeEventListener("resize", handleResize);
-    }, []);
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
 return (
   <div className="container py-4">

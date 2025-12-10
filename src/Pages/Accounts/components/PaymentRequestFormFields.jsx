@@ -58,13 +58,13 @@ function PaymentRequestFormFields({
           required
         />
       </div>
-           <div className="col-md-6">
+      <div className="col-md-6">
         <label className="form-label">
           Requested Agent <span className="text-danger">*</span>
         </label>
         <select
           className="form-select"
-          value={formData.Requested_Agent_ID || ""}
+          value={formData.Agent_ID || ""}
           onChange={handleFieldChange("Agent")}
           required
         >
@@ -85,6 +85,17 @@ function PaymentRequestFormFields({
           onChange={handleFieldChange("Request_Note")}
         />
       </div>
+      {includeRequestId && (
+        <div className="col-md-6">
+          <label className="form-label">Payment Request ID</label>
+          <input
+            type="text"
+            className="form-control"
+            value={formData.Payment_Request_ID || ""}
+            readOnly
+          />
+        </div>
+      )}
     </>
   );
 }
