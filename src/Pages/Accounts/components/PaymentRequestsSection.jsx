@@ -89,7 +89,8 @@ function PaymentRequestsSection({
                                 .filter(Boolean)
                                 .join(" ")
                             : "") ||
-                          request.Agent?.Name1 ||
+                          request.Agent?.Name ||
+                          request.Agent?.name ||
                           request.Agent?.User_Name ||
                           request.Agent?.user_name ||
                           request.Agent?.Login_Email_Address ||
