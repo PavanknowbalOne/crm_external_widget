@@ -5,7 +5,7 @@ import Invoices from './Pages/Invoices/Invoices';
 function App() {
   return (
     <div className="App">
-     <Acconts />
+      <Acconts />
      <Invoices />
     </div>
   );

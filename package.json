@@ -7,14 +7,16 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^13.5.0",
+    "openai": "^6.14.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
+    "react-phone-input-2": "^2.15.1",
     "react-scripts": "5.0.1",
     "web-vitals": "^2.1.4"
   },
   "engines": {
-  "node": "20"
-},
+    "node": "20"
+  },
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",

@@ -36,3 +36,143 @@
     transform: rotate(360deg);
   }
 }
+
+.invoice-fields-group {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 1.5rem;
+  row-gap: 0.75rem;
+}
+
+.invoice-phone-container {
+  width: 100%;
+}
+
+.invoice-phone-input {
+  width: 100% !important;
+  height: 38px !important;
+  font-size: 0.95rem !important;
+}
+
+.invoice-phone-flag {
+  border-right: 1px solid #dee2e6 !important;
+}
+
+.invoice-phone-dropdown {
+  max-height: 300px;
+  overflow-y: auto;
+  z-index: 25000;
+  width: 200px !important;
+}
+
+.invoice-form-grid {
+  display: flex;
+  gap: 2.5rem;
+  flex-wrap: wrap;
+}
+
+.invoice-modal-dialog {
+  min-height: calc(100vh - 2rem);
+  display: flex;
+  align-items: center;
+}
+
+.invoice-modal-content {
+  width: 100%;
+}
+
+@media (max-width: 768px) {
+  .invoice-modal-dialog {
+    min-height: 100%;
+    align-items: flex-start;
+  }
+}
+
+.invoice-form-column {
+  flex: 1 1 320px;
+}
+
+.invoice-inline-field {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.invoice-inline-field.align-top {
+  align-items: flex-start;
+}
+
+.invoice-inline-label {
+  width: 140px;
+  font-weight: 600;
+  color: #4c4f59;
+  text-align: left;
+}
+
+.invoice-inline-field.align-top .invoice-inline-label {
+  padding-top: 0.35rem;
+}
+
+.invoice-inline-control .form-control,
+.invoice-inline-control .form-select,
+.invoice-inline-control .invoice-phone-container {
+  width: 100%;
+}
+
+.invoice-stack-field {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 1rem;
+}
+
+.invoice-stack-label {
+  font-weight: 600;
+  color: #4c4f59;
+}
+
+.invoice-summary-grid {
+  display: flex;
+  gap: 2rem;
+  flex-wrap: wrap;
+}
+
+.invoice-summary-left {
+  flex: 1 1 320px;
+}
+
+.invoice-summary-right {
+  flex: 1 1 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.invoice-summary-field {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.invoice-summary-label {
+  min-width: 140px;
+}
+
+.invoice-summary-value {
+  flex: 1;
+}
+
+.invoice-summary-value input {
+  background-color: #f8f9fb;
+}
+
+.invoice-notes {
+  min-height: 120px;
+  resize: vertical;
+}
+
+@media (max-width: 768px) {
+  .invoice-summary-label {
+    min-width: 120px;
+  }
+}
