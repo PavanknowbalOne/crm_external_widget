@@ -749,6 +749,7 @@ function Acconts() {
       if (!createHandler) {
         throw new Error("Zoho add API is not available.");
       }
+      const dataModule = getCreatorModule(creator, "DATA");
       const appName = getAppLinkName() || "knowbal-one";
       const agentId =
         createFormData.Agent_ID ||
@@ -783,15 +784,34 @@ function Acconts() {
         throw new Error(errorMessage);
       }
       setCreateSaveStatus("success");
+      let fetchedRecord = null;
+      try {
+        const newRecordId = response?.data?.ID || response?.data?.id;
+        if (newRecordId && dataModule?.getRecords) {
+          const recordResponse = await dataModule.getRecords({
+            report_name: PAYMENT_REQUEST_REPORT_NAME,
+            criteria: `(ID == ${newRecordId})`,
+            page: 1,
+          });
+          const record = recordResponse?.data?.[0];
+          if (record) {
+            fetchedRecord = prepareRequestRecord(record);
+          }
+        }
+      } catch (fetchError) {
+        console.error("Unable to fetch newly created payment request:", fetchError);
+      }
       const normalizedAgentSelection = normalizeAgentRecord(
         createFormData.Agent || createFormData.Agent_ID || agentId
       );
-      const createdRecord = prepareRequestRecord({
-        ...createFormData,
-        ...data,
-        ...response?.data,
-        Agent: normalizedAgentSelection,
-      });
+      const createdRecord =
+        fetchedRecord ||
+        prepareRequestRecord({
+          ...createFormData,
+          ...data,
+          ...response?.data,
+          Agent: normalizedAgentSelection,
+        });
       setPaymentRequests((prev) => [createdRecord, ...prev]);
       setCreateFormData(getInitialCreateFormData());
       closeCreateForm();
