@@ -4,23 +4,19 @@ import { formatCurrency, getStatusVariant } from "../utils/recordUtils";
 
 function PaymentRequestsSection({
   paymentRequests = [],
-  requestSearch,
-  onSearchChange,
   onAddRequest,
   onUpdateRequest,
+  onEmailRequest = () => {},
   onMarkReceived,
   expandedRequestId,
   onToggleRequest,
   expandedReceipts,
   expandedReceiptsTotal,
 }) {
-  const shownCount = paymentRequests.length;
-
   return (
     <section className="card shadow-sm border-0 mb-4">
       <div className="card-header d-flex flex-column flex-md-row gap-3 gap-md-0 align-items-md-center justify-content-between bg-white py-3">
         <div>
-          <h2 className="h5 mb-1">Payment Requests</h2>
           <p className="text-muted small mb-0">
             Click a row to view its receipts, and use the action buttons to update.
           </p>
@@ -33,14 +29,6 @@ function PaymentRequestsSection({
           >
             + Add Request
           </button>
-          <input
-            type="search"
-            className="form-control form-control-sm"
-            placeholder="Search requests..."
-            value={requestSearch}
-            onChange={(e) => onSearchChange(e.target.value)}
-          />
-          <span className="badge text-bg-secondary">{shownCount} shown</span>
         </div>
       </div>
       <div className="table-responsive">
@@ -120,7 +108,7 @@ function PaymentRequestsSection({
                             className="btn btn-sm btn-outline-secondary"
                             onClick={(e) => {
                               e.stopPropagation();
-                              alert("Email workflow placeholder");
+                              onEmailRequest(request);
                             }}
                           >
                             Email

@@ -101,6 +101,7 @@ export const getInitialCreateFormData = () => ({
   Received_Amount: 0,
   Request_Note: "",
   Payment_Request_ID: "",
+  Payee_Location: "Australia",
   Agent: null,
   Agent_ID: "",
 });
@@ -138,42 +139,33 @@ export const sumReceiptAmounts = (receipts = []) => {
 
 export const getReceiptMeta = (receipt = {}) => {
   const receiptDate =
-    receipt.Payment_Date ||
     receipt.Received_Date ||
-    receipt.Receipt_Date ||
-    receipt.Date ||
-    receipt.Created_Time ||
     "—";
   const receiptAmount =
-    receipt.Received_Amount ??
-    receipt.Amount ??
-    receipt.Payment_Amount ??
     receipt.Amount_Received ??
-    receipt.Amount_Paid ??
     0;
   const receiptMode =
     receipt.Payment_Mode ||
-    receipt.Payment_Type ||
-    receipt.Mode ||
     "—";
-  const receiptReference =
-    receipt.Payment_Reference ||
-    receipt.Reference_Number ||
-    receipt.Transaction_ID ||
-    receipt.Payment_Number ||
+  const unUtilizedAmount =
+    receipt.Un_Utilised_Amount ||
+    "—";  
+  const receiptNote =
+    receipt.Note ||
     "—";
   const receiptNumber =
     receipt.Receive_ID ||
-    receipt.Payment_ID ||
-    receipt.ID ||
-    receipt.Reference_Number ||
     "—";
+   const receiptReconcilation = 
+     receipt.Reconciliation1 
 
   return {
     receiptDate,
     receiptAmount,
     receiptMode,
-    receiptReference,
+    unUtilizedAmount,
+    receiptNote,
+    receiptReconcilation,
     receiptNumber,
   };
 };

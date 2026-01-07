@@ -37,11 +37,63 @@ const createLineItem = () => ({
   Description: "",
   Price: "",
   Discount: "0",
-  GST_Type: "NA",
+  GST_Type: "Inclusive",
   GST_Amount: "",
   Item_Notes: "",
   Invoice: "",
 });
+
+const GST_RATE_INCLUSIVE = 0.0909;
+const GST_RATE_EXCLUSIVE = 0.10;
+
+const resequenceLineItems = (items = []) =>
+  items.map((item, index) => ({
+    ...item,
+    S_No: index + 1,
+  }));
+
+const resolveSequenceNumber = (item) => {
+  const candidates = [
+    item?.S_No,
+    item?.Sequence,
+    item?.Sequence_No,
+    item?.Sequence_Number,
+  ];
+  for (const candidate of candidates) {
+    const parsed = Number(candidate);
+    if (!Number.isNaN(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return null;
+};
+
+const sortLineItemsBySequence = (items = []) => {
+  return items
+    .map((item, index) => ({
+      item,
+      index,
+      sequence: resolveSequenceNumber(item),
+    }))
+    .sort((a, b) => {
+      const aSeq = a.sequence;
+      const bSeq = b.sequence;
+      if (aSeq !== null && bSeq !== null) {
+        if (aSeq === bSeq) {
+          return a.index - b.index;
+        }
+        return aSeq - bSeq;
+      }
+      if (aSeq !== null) {
+        return -1;
+      }
+      if (bSeq !== null) {
+        return 1;
+      }
+      return a.index - b.index;
+    })
+    .map(({ item }) => item);
+};
 
 const StackField = ({ label, required, children, helper }) => (
   <div className="invoice-stack-field">
@@ -73,12 +125,91 @@ const normalizeIdValue = (value) => {
       value.__optionId ||
       value.value ||
       value.Service_Id ||
-      value.Agent_ID ||
       ""
     );
   }
   return String(value);
 };
+
+const buildBillingAddressObject = (source = {}) => {
+  const line1 =
+    source.Billing_Address_Line_1 ||
+    source.address_line_1 ||
+    source.Address_Line_1 ||
+    "";
+  const line2 =
+    source.Billing_Address_Line_2 ||
+    source.address_line_2 ||
+    source.Address_Line_2 ||
+    "";
+  const city =
+    source.City ||
+    source.district_city ||
+    source.city ||
+    source.Billing_City ||
+    "";
+  const state =
+    source.State ||
+    source.state_province ||
+    source.state ||
+    source.Billing_State ||
+    "";
+  const postalCode =
+    source.Postal_Code ||
+    source.postal_code ||
+    source.Zip_Code ||
+    "";
+  const country =
+    source.Country ||
+    source.country ||
+    source.Billing_Country ||
+    "";
+  const hasValue = [line1, line2, city, state, postalCode, country].some(
+    (value) => Boolean(value)
+  );
+  if (!hasValue) {
+    return undefined;
+  }
+  return {
+    address_line_1: line1 || "",
+    address_line_2: line2 || "",
+    district_city: city || "",
+    state_province: state || "",
+    postal_code: postalCode || "",
+    country: country || "",
+  };
+};
+
+const extractBillingAddressFields = (billingAddress) => {
+  if (!billingAddress || typeof billingAddress !== "object") {
+    return {};
+  }
+  return {
+    Billing_Address_Line_1: billingAddress.address_line_1 || "",
+    Billing_Address_Line_2: billingAddress.address_line_2 || "",
+    City:
+      billingAddress.district_city ||
+      billingAddress.city ||
+      "",
+    State: billingAddress.state_province || billingAddress.state || "",
+    Postal_Code: billingAddress.postal_code || "",
+    Country: billingAddress.country || "",
+  };
+};
+
+const getAppLinkName = () =>
+  window.ZOHO?.CREATOR?.ENV?.appLinkName ||
+  window.ZOHO?.CREATOR?.config?.appLinkName ||
+  window.__APP_LINK_NAME__ ||
+  "knowbal-one";
+
+const INVOICE_LINE_ITEM_REPORT_NAME = "Invoice_Line_Items1";
+
+const resolveDeleteLineItemHandler = () =>
+  window.ZOHO?.CREATOR?.DATA?.deleteRecordById ||
+  window.ZOHO?.CreatorSDK?.DATA?.deleteRecordById ||
+  window.ZOHO?.DATA?.deleteRecordById ||
+  null;
 
 function InvoiceCreateModal({
   isOpen,
@@ -92,10 +223,15 @@ function InvoiceCreateModal({
   agentOptions = [],
   serviceOptions = [],
   formatCurrency,
+  clientDetails = null,
+  serviceDetails = null,
 }) {
   const [formData, setFormData] = useState(getInitialFormData());
-  const [lineItems, setLineItems] = useState([createLineItem()]);
+  const [lineItems, setLineItems] = useState(() =>
+    resequenceLineItems([createLineItem()])
+  );
   const [formError, setFormError] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeServiceDropdown, setActiveServiceDropdown] = useState(null);
   const serviceDropdownRefs = useRef({});
   const [serviceDropdownStyle, setServiceDropdownStyle] = useState(null);
@@ -110,26 +246,233 @@ function InvoiceCreateModal({
     return lookup;
   }, [serviceOptions]);
 
+  const deriveClientDefaults = useCallback(() => {
+    if (!clientDetails) {
+      return {};
+    }
+    const firstName =
+      clientDetails?.Name_of_Client1?.first_name ||
+      clientDetails?.Name_of_Client?.first_name ||
+      clientDetails?.Client_First_Name ||
+      clientDetails?.First_Name ||
+      clientDetails?.Name?.first_name ||
+      "";
+    const lastName =
+      clientDetails?.Name_of_Client1?.last_name ||
+      clientDetails?.Name_of_Client?.last_name ||
+      clientDetails?.Client_Last_Name ||
+      clientDetails?.Last_Name ||
+      clientDetails?.Name?.last_name ||
+      "";
+    const billingName =
+      [firstName, lastName].filter(Boolean).join(" ").trim() ||
+      clientDetails?.Client_Name ||
+      clientDetails?.Name ||
+      clientDetails?.Billing_Name ||
+      "";
+    const addressLine1 =
+      clientDetails?.Billing_Address_Line_1 ||
+      clientDetails?.Address_Line_1 ||
+      clientDetails?.Address1 ||
+      clientDetails?.Address?.Address_Line_1 ||
+      clientDetails?.Address?.address_line_1 ||
+      "";
+    const addressLine2 =
+      clientDetails?.Billing_Address_Line_2 ||
+      clientDetails?.Address_Line_2 ||
+      clientDetails?.Address2 ||
+      clientDetails?.Address?.Address_Line_2 ||
+      clientDetails?.Address?.address_line_2 ||
+      "";
+    const city =
+      clientDetails?.City ||
+      clientDetails?.Billing_City ||
+      clientDetails?.Address?.City ||
+      clientDetails?.Address?.city ||
+      clientDetails?.Address?.district_city ||
+      "";
+    const state =
+      clientDetails?.State ||
+      clientDetails?.Billing_State ||
+      clientDetails?.Address?.State ||
+      clientDetails?.Address?.state ||
+      clientDetails?.Address?.state_province ||
+      "";
+    const postalCode =
+      clientDetails?.Postal_Code ||
+      clientDetails?.Zip_Code ||
+      clientDetails?.Billing_Postal_Code ||
+      clientDetails?.Address?.Postal_Code ||
+      clientDetails?.Address?.postal_code ||
+      "";
+    const country =
+      clientDetails?.Country ||
+      clientDetails?.Billing_Country ||
+      clientDetails?.Address?.Country ||
+      clientDetails?.Address?.country ||
+      "";
+    const email =
+      clientDetails?.Email ||
+      clientDetails?.Client_Email ||
+      clientDetails?.Primary_Email ||
+      "";
+    const phoneNumber =
+      clientDetails?.Phone_Number ||
+      clientDetails?.Phone ||
+      clientDetails?.Mobile ||
+      clientDetails?.Contact_Number ||
+      "";
+    const phoneCountryCode =
+      clientDetails?.Phone_Country_Code ||
+      clientDetails?.Phone_Number_Country_Code ||
+      clientDetails?.Country_Code ||
+      "";
+    const phoneCountryIso =
+      clientDetails?.Phone_Country_Iso ||
+      clientDetails?.Phone_Number_Country_Iso ||
+      clientDetails?.Country_Iso ||
+      "";
+    const defaults = {};
+    if (billingName) defaults.Billing_Name = billingName;
+    if (addressLine1) defaults.Billing_Address_Line_1 = addressLine1;
+    if (addressLine2) defaults.Billing_Address_Line_2 = addressLine2;
+    if (city) defaults.City = city;
+    if (state) defaults.State = state;
+    if (postalCode) defaults.Postal_Code = postalCode;
+    if (country) defaults.Country = country;
+    if (email) defaults.Email = email;
+    if (phoneNumber) defaults.Phone_Number = phoneNumber;
+    if (phoneCountryCode) defaults.Phone_Country_Code = phoneCountryCode;
+    if (phoneCountryIso) defaults.Phone_Country_Iso = phoneCountryIso;
+    const billingAddress = buildBillingAddressObject({
+      Billing_Address_Line_1: addressLine1,
+      Billing_Address_Line_2: addressLine2,
+      City: city,
+      State: state,
+      Postal_Code: postalCode,
+      Country: country,
+    });
+    if (billingAddress) {
+      defaults.Billing_Address = billingAddress;
+    }
+    return defaults;
+  }, [clientDetails]);
+
+  const deriveServiceDefaults = useCallback(() => {
+    if (!serviceDetails) {
+      return {};
+    }
+    const defaults = {};
+    const agentCandidates = [
+      serviceDetails?.Assigned_User,
+      serviceDetails?.Assigned_User?.ID,
+      serviceDetails?.Assigned_User?.id,
+      serviceDetails?.Assigned_To,
+      serviceDetails?.Assigned_To?.ID,
+      serviceDetails?.Assigned_To?.id,
+      serviceDetails?.Assigned_Agent,
+      serviceDetails?.Agent,
+      serviceDetails?.Agent?.ID,
+      serviceDetails?.Agent?.id,
+      serviceDetails?.Agent_ID,
+    ];
+    for (const candidate of agentCandidates) {
+      const normalized = normalizeIdValue(candidate);
+      if (normalized) {
+        defaults.Agent = normalized;
+        defaults.Agent_ID = normalized;
+        break;
+      }
+    }
+    const serviceCandidates = [
+      serviceDetails?.Service,
+      serviceDetails?.Service?.ID,
+      serviceDetails?.Service?.id,
+      serviceDetails?.Service_ID,
+      serviceDetails?.Service_Link,
+      serviceDetails?.Service_Master,
+      serviceDetails?.Service_Master?.ID,
+      serviceDetails?.Select_Service,
+      serviceDetails?.Select_Service?.Service,
+      serviceDetails?.Select_Service?.ID,
+    ];
+    for (const candidate of serviceCandidates) {
+      const normalized = normalizeIdValue(candidate);
+      if (normalized) {
+        defaults.Service = normalized;
+        defaults.Service_Id = normalized;
+        break;
+      }
+    }
+    const descriptionCandidates = [
+      serviceDetails?.Invoice_Service_Description,
+      serviceDetails?.Service_Description,
+      serviceDetails?.Service?.Description,
+      serviceDetails?.Description,
+      serviceDetails?.Select_Service?.Description,
+      serviceDetails?.Service_Master?.Description,
+      serviceDetails?.Service_Master?.Service_Description,
+    ];
+    for (const candidate of descriptionCandidates) {
+      if (candidate) {
+        defaults.Service_Description = String(candidate);
+        break;
+      }
+    }
+    return defaults;
+  }, [serviceDetails]);
+
+  const clientDefaults = useMemo(
+    () => deriveClientDefaults(),
+    [deriveClientDefaults]
+  );
+
+  const serviceDefaults = useMemo(
+    () => deriveServiceDefaults(),
+    [deriveServiceDefaults]
+  );
+
+  const buildCreateDefaults = useCallback(() => {
+    return {
+      ...getInitialFormData(),
+      ...clientDefaults,
+      ...serviceDefaults,
+    };
+  }, [clientDefaults, serviceDefaults]);
+
   const mapInvoiceToFormState = useCallback((data) => {
     if (!data) {
       return getInitialFormData();
     }
+    const billingAddressFields = extractBillingAddressFields(
+      data.Billing_Address
+    );
     return {
       ...getInitialFormData(),
       ...data,
+      Billing_Address_Line_1:
+        data.Billing_Address_Line_1 ||
+        billingAddressFields.Billing_Address_Line_1 ||
+        "",
+      Billing_Address_Line_2:
+        data.Billing_Address_Line_2 ||
+        billingAddressFields.Billing_Address_Line_2 ||
+        "",
+      City: data.City || billingAddressFields.City || "",
+      State: data.State || billingAddressFields.State || "",
+      Postal_Code: data.Postal_Code || billingAddressFields.Postal_Code || "",
+      Country: data.Country || billingAddressFields.Country || "",
       Service: normalizeIdValue(
         data.Invoice_Service_ID ||
           data.Invoice_Service ||
           data.Service ||
           data.Service_ID
       ),
-      Agent: normalizeIdValue(data.Agent_ID || data.Agent),
+      Agent: normalizeIdValue(data.Agent),
       Phone_Number: data.Phone_Number || data.Phone || "",
       Phone_Country_Code: data.Phone_Country_Code || "+91",
       Phone_Country_Iso:
-        data.Phone_Country_Iso ||
-        data.Phone_Country_Code ||
-        "IN",
+        data.Phone_Country_Iso || data.Phone_Country_Code || "IN",
       Invoice_Date: formatDateForInput(data.Invoice_Date) || "",
     };
   }, []);
@@ -137,11 +480,13 @@ function InvoiceCreateModal({
   const mapInvoiceLineItems = useCallback(
     (items, invoiceId) => {
       if (!items || !items.length) {
-        return [createLineItem()];
+        return resequenceLineItems([createLineItem()]);
       }
-      return items.map((item) => {
-        const rawServiceId =
-          item.Service_Id ||
+      const sortedItems = sortLineItemsBySequence(items);
+      return resequenceLineItems(
+        sortedItems.map((item) => {
+          const rawServiceId =
+            item.Service_Id ||
           item.Service?.ID ||
           item.Service?.id ||
           item.Service ||
@@ -155,27 +500,29 @@ function InvoiceCreateModal({
           item.Service_Name ||
           item.Service ||
           "";
-        return {
-          id: `${item.ID || item.id || Date.now()}-${Math.random()}`,
-          ID: item.ID || item.Invoice_Line_Item_ID || item.Line_Item_ID || "",
-          Service: serviceLabel || serviceId,
-          Service_Id: serviceId,
-          Service_Search:
-            item.Service_Search || serviceLabel || item.Service || "",
-          Description:
-            item.Description ||
-            item.Service_Description ||
-            serviceLabel ||
-            item.Service ||
-            "",
-          Price: item.Price || "",
-          Discount: item.Discount || "0",
-          GST_Type: item.GST_Type || item.GST || "NA",
-          GST_Amount: item.GST_Amount || "",
-          Item_Notes: item.Item_Notes || item.Notes || "",
-          Invoice: invoiceId || item.Invoice || "",
-        };
-      });
+          return {
+            id: `${item.ID || item.id || Date.now()}-${Math.random()}`,
+            ID: item.ID || item.Invoice_Line_Item_ID || item.Line_Item_ID || "",
+            Service: serviceLabel || serviceId,
+            Service_Id: serviceId,
+            Service_Search:
+              item.Service_Search || serviceLabel || item.Service || "",
+            Description:
+              item.Description ||
+              item.Service_Description ||
+              serviceLabel ||
+              item.Service ||
+              "",
+            Price: item.Price || "",
+            Discount: item.Discount || "0",
+            GST_Type: item.GST_Type || item.GST || "Inclusive",
+            GST_Amount: item.GST_Amount || "",
+            Item_Notes: item.Item_Notes || item.Notes || "",
+            Invoice: invoiceId || item.Invoice || "",
+            S_No: item.S_No,
+          };
+        })
+      );
     },
     [serviceLookup]
   );
@@ -195,16 +542,17 @@ function InvoiceCreateModal({
       }
       return;
     }
-    setFormData(getInitialFormData());
-    setLineItems([createLineItem()]);
+    setFormData(buildCreateDefaults());
+    setLineItems(resequenceLineItems([createLineItem()]));
     setFormError(null);
     setActiveServiceDropdown(null);
   }, [
-    isOpen,
-    mode,
+    buildCreateDefaults,
     initialData,
-    mapInvoiceToFormState,
+    isOpen,
     mapInvoiceLineItems,
+    mapInvoiceToFormState,
+    mode,
   ]);
 
   useEffect(() => {
@@ -235,38 +583,121 @@ function InvoiceCreateModal({
     });
   }, [isOpen, serviceOptions, serviceLookup]);
 
-  const totals = useMemo(() => {
-    const subtotal = lineItems.reduce((sum, item) => {
-      const price = Number(item.Price) || 0;
-      return sum + price;
-    }, 0);
-    const discountAmount = lineItems.reduce((sum, item) => {
-      const price = Number(item.Price) || 0;
-      const discountPercent = Number(item.Discount) || 0;
-      return sum + (price * discountPercent) / 100;
-    }, 0);
-    const gstTotal = lineItems.reduce((sum, item) => {
-      const gst = Number(item.GST_Amount) || 0;
-      const gstType = item.GST_Type || "NA";
-      if (gstType === "Exclusive") {
-        return sum + gst;
+  useEffect(() => {
+    if (!isOpen || mode !== "create") {
+      return;
+    }
+    if (!serviceDefaults?.Agent) {
+      return;
+    }
+    setFormData((prev) => {
+      if (prev.Agent) {
+        return prev;
       }
-      if (gstType === "Inclusive") {
-        return sum + gst;
+      return {
+        ...prev,
+        Agent: serviceDefaults.Agent,
+      };
+    });
+  }, [isOpen, mode, serviceDefaults]);
+
+  useEffect(() => {
+    if (!isOpen || mode !== "create") {
+      return;
+    }
+    const defaultServiceId =
+      serviceDefaults?.Service_Id || serviceDefaults?.Service || "";
+    if (!defaultServiceId) {
+      return;
+    }
+    setLineItems((prev) => {
+      if (!Array.isArray(prev) || !prev.length) {
+        return prev;
       }
-      return sum;
-    }, 0);
-    const taxableAmount = subtotal - discountAmount;
-    const taxAmount = gstTotal;
-    const totalAmount = taxableAmount + gstTotal;
+      const firstItem = prev[0];
+      if (firstItem.Service || firstItem.Service_Id) {
+        return prev;
+      }
+      const normalizedServiceId = normalizeIdValue(defaultServiceId);
+      if (!normalizedServiceId) {
+        return prev;
+      }
+      const serviceLabel =
+        serviceLookup.get(String(normalizedServiceId)) ||
+        serviceDetails?.Service?.zc_display_value ||
+        serviceDetails?.Select_Service?.Service ||
+        serviceDetails?.Service_Name ||
+        "";
+      const updatedFirst = {
+        ...firstItem,
+        Service: serviceLabel || normalizedServiceId,
+        Service_Id: normalizedServiceId,
+        Service_Search: serviceLabel || normalizedServiceId,
+        Description:
+          firstItem.Description ||
+          serviceDefaults?.Service_Description ||
+          serviceDetails?.Service_Description ||
+          serviceLabel ||
+          "",
+      };
+      return [updatedFirst, ...prev.slice(1)];
+    });
+  }, [isOpen, mode, serviceDefaults, serviceLookup, serviceDetails]);
+
+  const calculateItemFinancials = useCallback((item) => {
+    const price = Number(item.Price) || 0;
+    const discountPercent = Number(item.Discount) || 0;
+    const discountValue = Number(((price * discountPercent) / 100).toFixed(2));
+    const netPrice = Number((price - discountValue).toFixed(2));
+    const gstType = item.GST_Type || item.GST || "Inclusive";
+    let gstAmount = 0;
+    if (gstType === "Inclusive") {
+      gstAmount = netPrice * GST_RATE_INCLUSIVE;
+    } else if (gstType === "Exclusive") {
+      gstAmount = netPrice * GST_RATE_EXCLUSIVE;
+    }
+    const roundedGstAmount = Number(gstAmount.toFixed(2));
+    let lineAmount = netPrice;
+    if (gstType === "Exclusive") {
+      lineAmount = Number((netPrice + roundedGstAmount).toFixed(2));
+    }
     return {
-      subtotal,
-      discountAmount,
-      taxableAmount,
-      taxAmount,
-      totalAmount,
+      price,
+      discountPercent,
+      discountValue,
+      netPrice,
+      gstAmount: roundedGstAmount,
+      gstType,
+      lineAmount,
     };
-  }, [lineItems]);
+  }, []);
+
+  const totals = useMemo(() => {
+    return lineItems.reduce(
+      (acc, item) => {
+        const {
+          price,
+          discountValue,
+          gstAmount,
+          netPrice,
+          lineAmount,
+        } = calculateItemFinancials(item);
+        acc.subtotal += price;
+        acc.discountAmount += discountValue;
+        acc.taxableAmount += netPrice;
+        acc.taxAmount += gstAmount;
+        acc.totalAmount += lineAmount;
+        return acc;
+      },
+      {
+        subtotal: 0,
+        discountAmount: 0,
+        taxableAmount: 0,
+        taxAmount: 0,
+        totalAmount: 0,
+      }
+    );
+  }, [calculateItemFinancials, lineItems]);
 
   const summaryFields = [
     { key: "subtotal", label: "Sub Total", value: totals.subtotal },
@@ -452,13 +883,49 @@ function InvoiceCreateModal({
   const selectClass = "form-select form-select-sm";
 
   const addLineItem = () => {
-    setLineItems((prev) => [...prev, createLineItem()]);
+    setLineItems((prev) => resequenceLineItems([...prev, createLineItem()]));
   };
 
   const removeLineItem = (id) => {
-    setLineItems((prev) =>
-      prev.length > 1 ? prev.filter((item) => item.id !== id) : prev
-    );
+    setLineItems((prev) => {
+      if (prev.length <= 1) {
+        return prev;
+      }
+      const filtered = prev.filter((item) => item.id !== id);
+      return resequenceLineItems(filtered);
+    });
+  };
+
+  const handleRemoveLineItem = async (item) => {
+    if (!item) {
+      return;
+    }
+    const recordId = item.ID;
+    if (!recordId) {
+      removeLineItem(item.id);
+      return;
+    }
+    const deleteHandler = resolveDeleteLineItemHandler();
+    if (!deleteHandler) {
+      setFormError("Zoho delete API is unavailable for line items.");
+      return;
+    }
+    try {
+      const response = await deleteHandler({
+        app_name: getAppLinkName(),
+        report_name: INVOICE_LINE_ITEM_REPORT_NAME,
+        id: recordId,
+        payload: { skip_workflow: ["form_workflow"] },
+      });
+      if (response?.code !== 3000) {
+        throw new Error(
+          response?.message || response?.error || "Unable to delete line item."
+        );
+      }
+      removeLineItem(item.id);
+    } catch (error) {
+      setFormError(error?.message || "Unable to delete line item.");
+    }
   };
 
   const handleReset = () => {
@@ -469,13 +936,16 @@ function InvoiceCreateModal({
       setLineItems(mapInvoiceLineItems(sourceLineItems, initialData.ID));
     } else {
       setFormData(getInitialFormData());
-      setLineItems([createLineItem()]);
+      setLineItems(resequenceLineItems([createLineItem()]));
     }
     setFormError(null);
     setActiveServiceDropdown(null);
   };
 
   const handleSave = async () => {
+    if (isSubmitting) {
+      return;
+    }
     const validationErrors = [];
     // if (!formData.Service) {
     //   validationErrors.push("Service is required.");
@@ -493,20 +963,76 @@ function InvoiceCreateModal({
       validationErrors.push("Phone number is required.");
     }
     const hasValidLineItem = lineItems.some(
-      (item) => item.Service && item.Service.trim()
+      (item) =>
+        item.Service &&
+        item.Service.trim() &&
+        item.Description &&
+        item.Description.trim() &&
+        item.Price !== undefined &&
+        item.Price !== null &&
+        String(item.Price).trim() !== ""
     );
     if (!hasValidLineItem) {
       validationErrors.push(
-        "Add at least one invoice line item with a selected service."
+        "Add at least one invoice line item with Service, Description, and Price."
+      );
+    }
+    const invalidRowIndex = lineItems.findIndex(
+      (item) =>
+        !(
+          item.Service &&
+          item.Service.trim() &&
+          item.Description &&
+          item.Description.trim() &&
+          item.Price !== undefined &&
+          item.Price !== null &&
+          String(item.Price).trim() !== ""
+        )
+    );
+    if (invalidRowIndex !== -1) {
+      validationErrors.push(
+        `Line item ${invalidRowIndex + 1}: Service, Description, and Price are required.`
       );
     }
     if (validationErrors.length > 0) {
       setFormError(validationErrors.join(" "));
       return;
     }
+    setIsSubmitting(true);
     const sanitizedLineItems = lineItems
-      .map(({ id: _omit, ...rest }) => rest)
-      .filter((item) => item.Service_Id || item.Service || item.Price);
+      .map(({ id: _omit, ...rest }) => {
+        const {
+          price,
+          discountPercent,
+          discountValue,
+          gstAmount,
+          lineAmount,
+          netPrice,
+          gstType,
+        } = calculateItemFinancials(rest);
+        return {
+          ...rest,
+          Price: price,
+          Discount: discountPercent,
+          Discount_Amount: Number(discountValue.toFixed(2)),
+          GST_Type: gstType,
+          GST: gstType,
+          GST_Amount: gstAmount,
+          Amount: lineAmount,
+          Line_Total: lineAmount,
+          Net_Amount: Number(netPrice.toFixed(2)),
+        };
+      })
+      .filter(
+        (item) =>
+          item.Service_Id ||
+          item.Service ||
+          (typeof item.Price === "number" ? item.Price : Number(item.Price))
+      )
+      .map((item, index) => ({
+        ...item,
+        S_No: index + 1,
+      }));
     const selectedAgent =
       agentOptions.find((agent) => agent.__optionId === formData.Agent) || null;
     const selectedInvoiceService =
@@ -524,15 +1050,14 @@ function InvoiceCreateModal({
       ? String(resolvedServiceOption.__optionId)
       : normalizedServiceValue;
     const resolvedAgentId = normalizeIdValue(formData.Agent);
+    const billingAddressPayload = buildBillingAddressObject(formData);
     const newInvoice = {
       ...formData,
       Service: resolvedServiceId || "",
-      // Agent_ID: formData.Agent,
       // Invoice_Service_ID: formData.Service,
       Invoice_Date: formData.Invoice_Date,
       Billing_Name:formData.Billing_Name,
       ID: mode === "edit" ? initialData?.ID || formData.ID : undefined,
-      Agent_ID: resolvedAgentId,
       Invoice_Service_ID: resolvedServiceId,
       Agent: selectedAgent
         ? {
@@ -558,6 +1083,7 @@ function InvoiceCreateModal({
       Email: formData.Email,
       Phone_Number: formData.Phone_Number,
       Phone_Country_Code: formData.Phone_Country_Code,
+      Billing_Address: billingAddressPayload,
       Total_Amount: totals.totalAmount,
       Invoice_Line_Items: sanitizedLineItems,
       Line_Items: sanitizedLineItems,
@@ -569,12 +1095,15 @@ function InvoiceCreateModal({
         await onSave(newInvoice);
       }
       setFormData(getInitialFormData());
-      setLineItems([createLineItem()]);
+      setLineItems(resequenceLineItems([createLineItem()]));
       setFormError(null);
     } catch (saveError) {
       setFormError(saveError.message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
+console.log("2323" + JSON.stringify(serviceDetails));
 
   return (
     <div
@@ -602,9 +1131,18 @@ function InvoiceCreateModal({
               className="btn-close"
               aria-label="Close"
               onClick={onClose}
+              disabled={isSubmitting}
             ></button>
           </div>
           <div className="modal-body">
+            {isSubmitting && (
+              <div className="d-flex align-items-center gap-2 py-2">
+                <div className="spinner-border text-primary" role="status">
+                  <span className="visually-hidden">Saving invoice…</span>
+                </div>
+                <span>Saving invoice…</span>
+              </div>
+            )}
             {formError && (
               <div className="alert alert-danger py-2">{formError}</div>
             )}
@@ -620,25 +1158,10 @@ function InvoiceCreateModal({
                 <span>Loading invoice details…</span>
               </div>
             ) : (
+              <fieldset disabled={isSubmitting}>
               <>
             <div className="invoice-form-grid">
               <div className="invoice-form-column">
-                <InlineField label="Service" required>
-                  <select
-                    className={selectClass}
-                    value={formData.Service}
-                    onChange={(e) =>
-                      handleFieldChange("Service", e.target.value)
-                    }
-                  >
-                    <option value="">Select service</option>
-                    {serviceOptions.map((service) => (
-                      <option key={service.__optionId} value={service.__optionId}>
-                        {service.__optionLabel}
-                      </option>
-                    ))}
-                  </select>
-                </InlineField>
                 <InlineField label="Invoice Date" required>
                   <input
                     type="date"
@@ -792,29 +1315,25 @@ function InvoiceCreateModal({
                     </tr>
                   </thead>
                   <tbody>
-                    {lineItems.map((item) => {
-                      const price = Number(item.Price) || 0;
-                      const discountPercent = Number(item.Discount) || 0;
-                      const discountValue = (price * discountPercent) / 100;
-                      const baseAmount = price - discountValue;
-                      const gstAmount = Number(item.GST_Amount) || 0;
-                      const gstType = item.GST_Type || "NA";
-                      const lineAmount =
-                        gstType === "Exclusive"
-                          ? baseAmount + gstAmount
-                          : baseAmount;
+                    {lineItems.map((item, rowIndex) => {
+                      const {
+                        discountValue,
+                        gstAmount,
+                        lineAmount,
+                      } = calculateItemFinancials(item);
                       return (
                         <tr key={item.id}>
                           <td>
                             <button
                               type="button"
                               className="btn btn-link text-danger p-0"
-                              onClick={() => removeLineItem(item.id)}
+                              onClick={() => handleRemoveLineItem(item)}
                               disabled={lineItems.length === 1}
                             >
                               ×
                             </button>
                           </td>
+                  
                           <td style={{ minWidth: "200px", position: "relative" }}>
                             <div
                               className="dropdown w-100"
@@ -910,9 +1429,9 @@ function InvoiceCreateModal({
                             </div>
                           </td>
                           <td style={{ minWidth: "200px" }}>
-                            <input
-                              type="text"
+                            <textarea
                               className="form-control"
+                              rows={2}
                               value={item.Description}
                               onChange={(e) =>
                                 handleLineItemChange(
@@ -921,6 +1440,7 @@ function InvoiceCreateModal({
                                   e.target.value
                                 )
                               }
+                              style={{ resize: "vertical" }}
                             />
                           </td>
                           <td style={{ width: "140px" }}>
@@ -974,16 +1494,10 @@ function InvoiceCreateModal({
                           </td>
                           <td style={{ width: "140px" }}>
                             <input
-                              type="number"
+                              type="text"
                               className="form-control"
-                              value={item.GST_Amount}
-                              onChange={(e) =>
-                                handleLineItemChange(
-                                  item.id,
-                                  "GST_Amount",
-                                  e.target.value
-                                )
-                              }
+                              value={formatCurrency(gstAmount)}
+                              readOnly
                             />
                           </td>
                           <td style={{ width: "160px" }}>
@@ -1053,6 +1567,7 @@ function InvoiceCreateModal({
               </div>
             </div>
               </>
+              </fieldset>
             )}
           </div>
           <div className="modal-footer justify-content-end gap-2">
@@ -1060,10 +1575,16 @@ function InvoiceCreateModal({
               type="button"
               className="btn btn-outline-secondary"
               onClick={handleReset}
+              disabled={isSubmitting}
             >
               {mode === "edit" ? "Reset Changes" : "Reset"}
             </button>
-            <button type="button" className="btn btn-primary" onClick={handleSave}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleSave}
+              disabled={isSubmitting}
+            >
               {mode === "edit" ? "Update" : "Add"}
             </button>
           </div>

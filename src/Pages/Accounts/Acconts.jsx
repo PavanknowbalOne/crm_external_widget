@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import PaymentRequestsSection from "./components/PaymentRequestsSection";
 import PaymentRequestModal from "./components/PaymentRequestModal";
 import CreatePaymentRequestModal from "./components/CreatePaymentRequestModal";
@@ -11,12 +18,241 @@ import {
   sumReceiptAmounts,
 } from "./utils/recordUtils";
 
-function Acconts() {
+const PaymentRequestEmailModal = React.lazy(() =>
+  import("./components/PaymentRequestEmailModal")
+);
+
+const STRIPE_INTEGRATION_REPORT_NAME = "All_Stripe_Integrations";
+const STRIPE_LINK_PLACEHOLDER =
+  "https://crm.kondesk.com/KondeskPG/Index?q=fAdkzx-kXgwRRACU3_rST5ajJeNTxvjLDSXNFKF6DIk1JeEdXFh1XZbht8Rdloss";
+const STRIPE_CTA_TEXT = "Click here to pay by card";
+const CREATOR_DEFAULT_ORIGIN = "https://creatorapp.zoho.com.au";
+const CLIENT_CRITERIA_FIELDS = ["Client", "Client_ID", "Clientid"];
+const RECEIPT_CLIENT_FIELDS = ["Client_ID", "Clientid"];
+
+const buildEqualityCriteria = (fieldName, value, options = {}) => {
+  if (!fieldName || value === undefined || value === null || value === "") {
+    return "";
+  }
+  const raw = String(value).trim();
+  const numericPattern = /^-?\d+$/;
+  const isNumeric = numericPattern.test(raw);
+  const treatAsString =
+    typeof options.treatAsString === "boolean" ? options.treatAsString : !isNumeric;
+  const safeValue = treatAsString
+    ? `"${raw.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
+    : raw;
+  return `(${fieldName} == ${safeValue})`;
+};
+
+const buildClientCriteriaList = (value, fields = CLIENT_CRITERIA_FIELDS) => {
+  if (value === undefined || value === null || value === "") {
+    return [];
+  }
+  return fields
+    .map((field) => buildEqualityCriteria(field, value))
+    .filter(Boolean);
+};
+
+const isNoRecordsError = (error) => {
+  if (!error) {
+    return false;
+  }
+  const codeCandidates = [
+    error?.code,
+    error?.data?.code,
+    error?.response?.code,
+    error?.response?.data?.code,
+  ];
+  if (codeCandidates.some((code) => Number(code) === 9280)) {
+    return true;
+  }
+  const messageCandidates = [
+    error?.message,
+    error?.data?.message,
+    error?.response?.data?.message,
+    error?.description,
+    error?.data?.description,
+  ];
+  if (
+    messageCandidates.some((message) =>
+      message?.toString().toLowerCase().includes("no records found")
+    )
+  ) {
+    return true;
+  }
+  return false;
+};
+
+const isCriteriaError = (error) => {
+  if (!error) {
+    return false;
+  }
+  const message = (
+    error?.message ||
+    error?.data?.message ||
+    ""
+  ).toString().toLowerCase();
+  return (
+    error?.code === 3330 ||
+    message.includes("invalid criteria") ||
+    message.includes("left expression is of type") ||
+    message.includes("variable") ||
+    message.includes("column")
+  );
+};
+
+const ensureAbsoluteUrl = (url) => {
+  if (!url) {
+    return "";
+  }
+  if (/^https?:\/\//i.test(url) || /^data:/i.test(url)) {
+    return url;
+  }
+  if (url.startsWith("//")) {
+    return `${window?.location?.protocol || "https:"}${url}`;
+  }
+  const origin =
+    window?.ZOHO?.CREATOR?.config?.creatorOrigin ||
+    window?.ZOHO?.CREATOR?.config?.apporigin ||
+    CREATOR_DEFAULT_ORIGIN;
+  if (url.startsWith("/")) {
+    return `${origin}${url}`;
+  }
+  return `${origin}/${url}`;
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isRateLimitError = (error) => {
+  if (!error) return false;
+  const code =
+    error?.code ||
+    error?.data?.code ||
+    error?.response?.status ||
+    error?.statusCode;
+  const message =
+    (error?.message || error?.data?.message || "").toString().toLowerCase();
+  return (
+    code === 429 ||
+    code === 2930 ||
+    message.includes("too many requests") ||
+    message.includes("rate limit")
+  );
+};
+
+const callWithRetry = async (fn, { maxRetries = 3, delayMs = 1200 } = {}) => {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!isRateLimitError(error) || attempt >= maxRetries) {
+        throw error;
+      }
+      const waitTime = delayMs * Math.pow(2, attempt);
+      await sleep(waitTime);
+      attempt += 1;
+    }
+  }
+};
+
+const getCreatorModule = (creatorObj, moduleName) => {
+  const candidates = [
+    creatorObj,
+    window.ZOHO?.CREATOR,
+    window.ZOHO?.CreatorSDK,
+    window.ZOHO,
+    window,
+  ];
+  for (const candidate of candidates) {
+    if (candidate?.[moduleName]) {
+      return candidate[moduleName];
+    }
+    if (candidate?.CREATOR?.[moduleName]) {
+      return candidate.CREATOR[moduleName];
+    }
+  }
+  return null;
+};
+
+const resolveUploadFileHandler = (creatorObj) => {
+  const methodNames = ["uploadFile", "upload_file", "uploadFiles"];
+  const modulesToCheck = [
+    creatorObj,
+    creatorObj?.FILE,
+    creatorObj?.API,
+    creatorObj?.DATA,
+    creatorObj?.CREATOR,
+    creatorObj?.CREATOR?.API,
+    creatorObj?.CREATOR?.DATA,
+    creatorObj?.CREATOR?.FILE,
+    getCreatorModule(creatorObj, "FILE"),
+    getCreatorModule(creatorObj, "API"),
+    window.ZOHO?.CREATOR,
+    window.ZOHO?.CREATOR?.FILE,
+    window.ZOHO?.CREATOR?.API,
+    window.ZOHO?.CreatorSDK,
+    window.ZOHO?.CreatorSDK?.FILE,
+    window.ZOHO?.CreatorSDK?.API,
+    window.ZCAPI,
+    window.ZCAPI?.FILE,
+    window.ZCAPI?.API,
+  ];
+  for (const module of modulesToCheck) {
+    if (!module) continue;
+    for (const method of methodNames) {
+      if (typeof module[method] === "function") {
+        return module[method].bind(module);
+      }
+    }
+  }
+  return null;
+};
+
+  const resolveSendMailHandler = (creatorObj) => {
+  const methodNames = ["sendMail", "sendmail", "send_email"];
+  const modulesToCheck = [
+    creatorObj,
+    creatorObj?.UTIL,
+    creatorObj?.API,
+    creatorObj?.CREATOR,
+    creatorObj?.CREATOR?.UTIL,
+    creatorObj?.CREATOR?.API,
+    getCreatorModule(creatorObj, "UTIL"),
+    getCreatorModule(creatorObj, "API"),
+    window.ZOHO?.CREATOR,
+    window.ZOHO?.CREATOR?.UTIL,
+    window.ZOHO?.CREATOR?.API,
+    window.ZOHO?.CreatorSDK,
+    window.ZOHO?.CreatorSDK?.UTIL,
+    window.ZOHO?.CreatorSDK?.API,
+    window.ZCAPI,
+    window.ZCAPI?.UTIL,
+    window.ZCAPI?.API,
+  ];
+  for (const module of modulesToCheck) {
+    if (!module) continue;
+    for (const method of methodNames) {
+      if (typeof module[method] === "function") {
+        return module[method].bind(module);
+      }
+    }
+  }
+  return null;
+};
+
+function Acconts({ clientId, serviceId, clientDetails, serviceDetails }) {
   const [paymentRequests, setPaymentRequests] = useState([]);
   const [paymentReceipts, setPaymentReceipts] = useState([]);
-  const [, setUtilization] = useState([]);
+  const [paymentReceiptsLoaded, setPaymentReceiptsLoaded] = useState(false);
   const zohoInitPromiseRef = useRef(null);
   const zohoSdkPromiseRef = useRef(null);
+  const paymentRequestFetchStateRef = useRef({
+    clientId: null,
+    loading: false,
+    loaded: false,
+  });
   const [isRequestFormOpen, setRequestFormOpen] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [requestFormData, setRequestFormData] = useState(null);
@@ -24,9 +260,6 @@ function Acconts() {
   const [requestError, setRequestError] = useState(null);
   const [isRequestSaving, setIsRequestSaving] = useState(false);
   const [requestSaveStatus, setRequestSaveStatus] = useState(null);
-  const [viewportHeight, setViewportHeight] = useState(window.innerHeight);
-  const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
-  const [requestSearch, setRequestSearch] = useState("");
   const [isCreateFormOpen, setCreateFormOpen] = useState(false);
   const [createFormData, setCreateFormData] = useState(getInitialCreateFormData());
   const [createError, setCreateError] = useState(null);
@@ -40,21 +273,136 @@ function Acconts() {
   const [receiptSaveStatus, setReceiptSaveStatus] = useState(null);
   const [activeReceiptRequest, setActiveReceiptRequest] = useState(null);
   const [agentOptions, setAgentOptions] = useState([]);
+  const [receiptUploadFile, setReceiptUploadFile] = useState(null);
+  const [isEmailModalOpen, setEmailModalOpen] = useState(false);
+  const [emailFormData, setEmailFormData] = useState(null);
+  const [emailError, setEmailError] = useState(null);
+  const [isEmailSending, setEmailSending] = useState(false);
+  const [emailTemplates, setEmailTemplates] = useState([]);
+  const [emailPlaceholderValues, setEmailPlaceholderValues] = useState(null);
+  const stripeUrlCacheRef = useRef(new Map());
+  const paymentReceiptsPromiseRef = useRef(null);
+  const agentsFetchedRef = useRef(false);
+  const normalizedClientId = useMemo(
+    () => normalizeRecordId(clientId),
+    [clientId]
+  );
+  useEffect(() => {
+    paymentReceiptsPromiseRef.current = null;
+    setPaymentReceipts([]);
+    setPaymentReceiptsLoaded(false);
+  }, [normalizedClientId]);
 
-  const filteredPaymentRequests = useMemo(() => {
-    if (!requestSearch) {
-      return paymentRequests;
+  console.log("paymentRequests1111" + JSON.stringify(paymentRequests));
+  
+  const serviceIdRef = useRef(null);
+  const clientDetailsRef = useRef(null);
+  const serviceDetailsRef = useRef(null);
+  useEffect(() => {
+    serviceIdRef.current = normalizeRecordId(serviceId);
+  }, [serviceId]);
+  useEffect(() => {
+    clientDetailsRef.current = clientDetails || null;
+  }, [clientDetails]);
+  useEffect(() => {
+    serviceDetailsRef.current = serviceDetails || null;
+  }, [serviceDetails]);
+  
+
+  const getRequestClientIdentifier = (record) => {
+    if (!record) {
+      return "";
     }
-    const term = requestSearch.toLowerCase();
-    return paymentRequests.filter((req) => {
-      return (
-        req.Payment_Request_ID?.toLowerCase().includes(term) ||
-        req.Request_Note?.toLowerCase().includes(term) ||
-        req.Payment_Status?.toLowerCase().includes(term) ||
-        req.Agent?.zc_display_value?.toLowerCase().includes(term)
-      );
-    });
-  }, [paymentRequests, requestSearch]);
+    const candidates = [
+      record.Client_ID,
+      record.Client_ID?.ID,
+      record.Client_ID?.id,
+      record.Client_ID?.Client_ID,
+      record.Client_id,
+      record.Clientid,
+      record.Client?.ID,
+      record.Client?.id,
+      record.Client?.Client_ID,
+      record.Client?.Client_id,
+      record.Client_Details?.ID,
+      record.Client_Details?.Client_ID,
+    ];
+    const normalizeCandidate = (candidateValue) => {
+      if (candidateValue === undefined || candidateValue === null) {
+        return "";
+      }
+      if (typeof candidateValue === "object") {
+        const nestedValues = [
+          candidateValue.ID,
+          candidateValue.id,
+          candidateValue.Client_ID,
+          candidateValue.client_id,
+          candidateValue.Clientid,
+          candidateValue.value,
+          candidateValue.lookup_value,
+        ];
+        for (const nested of nestedValues) {
+          const normalizedNested = normalizeRecordId(nested);
+          if (normalizedNested) {
+            return normalizedNested;
+          }
+        }
+        return "";
+      }
+      return normalizeRecordId(candidateValue) || "";
+    };
+    for (const candidate of candidates) {
+      const normalized = normalizeCandidate(candidate);
+      if (normalized) {
+        return normalized;
+      }
+    }
+    return "";
+  };
+
+  const getClientDisplayName = (request) => {
+    if (!request) return "";
+    return (
+   request["Client.Name_of_Client1"].first_name||
+      ""
+    );
+  };
+
+  const buildEmailContent = (request) => {
+    const clientName = getClientDisplayName(request) || "Client";
+    const amount = request?.Requested_Amount
+      ? Number(request.Requested_Amount).toLocaleString("en-US", {
+          style: "currency",
+          currency: "USD",
+          minimumFractionDigits: 2,
+        })
+      : "";
+    const requestNumber = request?.Payment_Request_ID
+      ? `#${request.Payment_Request_ID}`
+      : "your recent request";
+    return `Dear ${clientName},
+
+We hope you are doing well. This is a friendly reminder about payment request ${requestNumber}.
+
+Requested Amount: ${amount || "—"}
+Request Date: ${request?.Request_Date || "—"}
+Status: ${request?.Payment_Status || "Pending"}
+
+If you have any questions or have already completed the payment, please ignore this message.
+
+Thank you,
+${request?.Agent?.zc_display_value || request?.Agent?.Name || "Team Knowbal"}`;
+  };
+
+  const parseEmailList = (value) => {
+    if (!value) return [];
+    return value
+      .split(/[,;\n]/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length);
+  };
+
+
 
   
   const DEFAULT_APP_LINK_NAME =
@@ -63,10 +411,11 @@ function Acconts() {
   const PAYMENT_REQUEST_FORM_NAME = "Payment_Request";
   const PAYMENT_RECEIPT_REPORT_NAME = "Payments_Received";
   const PAYMENT_RECEIPT_FORM_NAME = "Payment_Received";
-  const PAYMENT_UTILIZATION_REPORT_NAME = "Payment_Utilizations";
+  const PAYMENT_RECEIPT_FILE_FIELD = "Attachment";
   const USERS_REPORT_NAME = "All_Users";
+  const SEND_EMAIL_FORM_NAME = "Send_Email";
 
-  const getAgentOptionId = (candidate) => {
+  const getAgentOptionId = useCallback((candidate) => {
     if (candidate === undefined || candidate === null || candidate === "") {
       return "";
     }
@@ -82,9 +431,9 @@ function Acconts() {
           candidate.user_id
       ) || ""
     );
-  };
+  }, []);
 
-  const getAgentOptionLabel = (candidate) => {
+  const getAgentOptionLabel = useCallback((candidate) => {
     if (!candidate) {
       return "";
     }
@@ -117,9 +466,9 @@ function Acconts() {
       candidate.email ??
       `User ${fallbackId || ""}`.trim()
     );
-  };
+  }, [agentOptions, getAgentOptionId]);
 
-  const normalizeAgentRecord = (candidate) => {
+  const normalizeAgentRecord = useCallback((candidate) => {
     if (!candidate) {
       return null;
     }
@@ -149,9 +498,9 @@ function Acconts() {
       zc_display_value: label,
       display_value: label,
     };
-  };
+  }, [agentOptions, getAgentOptionId, getAgentOptionLabel]);
 
-  const prepareRequestRecord = (record) => {
+  const prepareRequestRecord = useCallback((record) => {
     if (!record) {
       return null;
     }
@@ -165,7 +514,7 @@ function Acconts() {
         normalizeRecordId(record.Agent_ID) ||
         "",
     };
-  };
+  }, [normalizeAgentRecord]);
 
   const getMissingRequestFields = (formData) => {
     const missing = [];
@@ -239,7 +588,21 @@ function Acconts() {
     return fallbackMessage;
   };
 
-  const getAppLinkName = () => {
+  const getZohoResponseErrorMessage = (response) => {
+    if (!response) {
+      return "";
+    }
+    const error = response.error ?? response?.data?.error;
+    if (!error) {
+      return "";
+    }
+    if (Array.isArray(error)) {
+      return error.map((item) => formatErrorDetail(item)).filter(Boolean).join(", ");
+    }
+    return formatErrorDetail(error);
+  };
+
+  const getAppLinkName = useCallback(() => {
     const fromEnv =
       window.ZOHO?.CREATOR?.ENV?.appLinkName ||
       window.ZOHO?.CREATOR?.config?.appLinkName ||
@@ -254,7 +617,7 @@ function Acconts() {
       return DEFAULT_APP_LINK_NAME;
     }
     return null;
-  };
+  }, [DEFAULT_APP_LINK_NAME]);
 
   const getReceiptsForRequest = useCallback(
     (request) => {
@@ -359,7 +722,7 @@ function Acconts() {
     [expandedPaymentReceipts]
   );
 
-  const loadZohoSdk = () => {
+  const loadZohoSdk = useCallback(() => {
     if (window.ZOHO?.CREATOR) {
       return Promise.resolve(window.ZOHO.CREATOR);
     }
@@ -390,9 +753,9 @@ function Acconts() {
       });
     }
     return zohoSdkPromiseRef.current;
-  };
+  }, []);
 
-  const ensureZohoReady = async () => {
+  const ensureZohoReady = useCallback(async () => {
     if (!window.ZOHO?.CREATOR) {
       await loadZohoSdk();
     }
@@ -419,29 +782,193 @@ function Acconts() {
     }
 
     return zohoInitPromiseRef.current;
-  };
+  }, [loadZohoSdk]);
+
+  const fetchStripeIntegrationUrl = useCallback(
+    async (request) => {
+      if (!request) {
+        return "";
+      }
+
+      const referenceId = normalizeRecordId(request.ID);
+
+      if (!referenceId) {
+        return "";
+      }
+
+      const creator = await ensureZohoReady();
+      const dataModule = getCreatorModule(creator, "DATA");
+
+      let recordUrl = null;
+      try {
+        const response = await dataModule.getRecords({
+          report_name: STRIPE_INTEGRATION_REPORT_NAME,
+          criteria: `Payment_Request_ID == ${referenceId}`,
+          page: 1,
+          per_page: 1,
+        });
+        recordUrl = response?.data?.[0]?.Url?.url || null;
+        console.log("recordUrl1111"+ recordUrl);
+        
+      } catch (err) {
+        console.warn("Unable to locate Stripe integration record", err);
+      }
+
+      if (!recordUrl) {
+        stripeUrlCacheRef.current.set(referenceId, "");
+        return "";
+      }
+      try {
+        // const recordResponse = await dataModule.getRecordById({
+        //   report_name: STRIPE_INTEGRATION_REPORT_NAME,
+        //   id: recordId,
+        // });
+        // const record =
+        //   recordResponse?.data ||
+        //   recordResponse?.record ||
+        //   (Array.isArray(recordResponse?.data)
+        //     ? recordResponse.data[0]
+        //     : null);
+
+        // const resolvedUrl =
+        //   record?.Url ||
+        //   record?.URL ||
+        //   record?.Payment_Url ||
+        //   record?.Payment_URL ||
+        //   record?.Link ||
+        //   "";
+        const normalizedUrl = ensureAbsoluteUrl(recordUrl);
+        stripeUrlCacheRef.current.set(referenceId, normalizedUrl || "");
+        return normalizedUrl || "";
+      } catch (err) {
+        console.warn("Unable to fetch Stripe integration record by ID", err);
+        stripeUrlCacheRef.current.set(referenceId, "");
+        return "";
+      }
+    },
+    [ensureZohoReady]
+  );
+
+  const loadPaymentReceipts = useCallback(async ({ forceRefresh = false } = {}) => {
+    if (!normalizedClientId) {
+      setPaymentReceipts([]);
+      setPaymentReceiptsLoaded(false);
+      return [];
+    }
+    if (forceRefresh) {
+      paymentReceiptsPromiseRef.current = null;
+      setPaymentReceiptsLoaded(false);
+    }
+    if (!forceRefresh && paymentReceiptsLoaded && paymentReceipts.length) {
+      return paymentReceipts;
+    }
+    if (!paymentReceiptsPromiseRef.current) {
+      paymentReceiptsPromiseRef.current = (async () => {
+        try {
+          const creator = await ensureZohoReady();
+          const dataModule = getCreatorModule(creator, "DATA");
+          if (!dataModule?.getRecords) {
+            throw new Error("Zoho DATA.getRecords API unavailable.");
+          }
+          const criteriaCandidates = buildClientCriteriaList(
+            normalizedClientId,
+            RECEIPT_CLIENT_FIELDS
+          );
+          if (!criteriaCandidates.length) {
+            setPaymentReceipts([]);
+            return [];
+          }
+          let lastCriteriaError = null;
+          for (const criteria of criteriaCandidates) {
+            try {
+              const response = await dataModule.getRecords({
+                report_name: PAYMENT_RECEIPT_REPORT_NAME,
+                criteria,
+              });
+              const records = response?.data || [];
+              setPaymentReceipts(records);
+              setPaymentReceiptsLoaded(true);
+              return records;
+            } catch (error) {
+              if (isCriteriaError(error)) {
+                lastCriteriaError = error;
+                continue;
+              }
+              throw error;
+            }
+          }
+          if (lastCriteriaError) {
+            throw lastCriteriaError;
+          }
+          setPaymentReceipts([]);
+          return [];
+        } finally {
+          paymentReceiptsPromiseRef.current = null;
+        }
+      })();
+    }
+    return paymentReceiptsPromiseRef.current;
+  }, [
+    ensureZohoReady,
+    normalizedClientId,
+    paymentReceipts,
+    paymentReceiptsLoaded,
+  ]);
+
+
+  const loadEmailTemplates = useCallback(async () => {
+    try {
+      const creator = await ensureZohoReady();
+      const dataModule = getCreatorModule(creator, "DATA");
+      if (!dataModule?.getRecords) {
+        throw new Error("Zoho DATA.getRecords API unavailable.");
+      }
+      const response = await callWithRetry(() =>
+        dataModule.getRecords({
+          report_name: "All_Email_Templates",
+        })
+      );
+      const templates = response?.data || [];
+      setEmailTemplates(templates);
+      return templates;
+    } catch (err) {
+      console.warn("Unable to fetch email templates", err);
+      setEmailTemplates([]);
+      return [];
+    }
+  }, [ensureZohoReady]);
+
+
+  const uploadPaymentReceiptAttachment = useCallback(
+    async ({ recordId, file }) => {
+      if (!recordId || !file) {
+        return;
+      }
+      const creator = await ensureZohoReady();
+      const uploadHandler =
+        creator?.FILE?.uploadFile ||
+        creator?.FILE?.upload_file ||
+        creator?.FILE?.uploadFiles ||
+        resolveUploadFileHandler(creator);
+      if (!uploadHandler) {
+        throw new Error("Unable to locate payment receipt file upload handler.");
+      }
+      const appName = getAppLinkName() || "knowbal-one";
+      const requestConfig = {
+        app_name: appName,
+        report_name: PAYMENT_RECEIPT_REPORT_NAME,
+        form_name: PAYMENT_RECEIPT_FORM_NAME,
+        id: recordId,
+        field_name: PAYMENT_RECEIPT_FILE_FIELD,
+        file,
+      };
+      return uploadHandler(requestConfig);
+    },
+    [ensureZohoReady, getAppLinkName]
+  );
 
  
 
-
-   const getCreatorModule = (creatorObj, moduleName) => {
-    const candidates = [
-      creatorObj,
-      window.ZOHO?.CREATOR,
-      window.ZOHO?.CreatorSDK,
-      window.ZOHO,
-      window,
-    ];
-    for (const candidate of candidates) {
-      if (candidate?.[moduleName]) {
-        return candidate[moduleName];
-      }
-      if (candidate?.CREATOR?.[moduleName]) {
-        return candidate.CREATOR[moduleName];
-      }
-    }
-   return null;
-  };
 
   const resolveUpdateHandler = (creatorObj) => {
     const methodNames = [
@@ -519,6 +1046,7 @@ function Acconts() {
     return null;
   };
 
+
   const fetchPaymentRequestDetails = async (requestId) => {
     if (!requestId) {
       return;
@@ -532,11 +1060,16 @@ function Acconts() {
       if (!dataModule?.getRecords) {
         throw new Error("Zoho DATA.getRecords API unavailable.");
       }
+    
+      
       const response = await dataModule.getRecords({
         report_name: PAYMENT_REQUEST_REPORT_NAME,
-        criteria: `(Payment_Request_ID == "${requestId}")`,
+        // criteria: `(Payment_Request_ID == "${requestId}")`,
+        criteria: `(Client == "${clientId}")`,
         page: 1,
       });
+    
+      
       const record = response?.data?.[0];
       if (!record) {
         setSelectedRequest(null);
@@ -631,6 +1164,8 @@ function Acconts() {
         Payment_Request_ID: requestFormData.Payment_Request_ID,
         Request_Note: requestFormData.Request_Note,
         Payment_Status: requestFormData.Payment_Status,
+        Payee_Location: requestFormData.Payee_Location,
+        Client:clientId
       };
       if (agentId) {
         data.Agent = agentId;
@@ -761,6 +1296,8 @@ function Acconts() {
         Payment_Request_ID: createFormData.Payment_Request_ID,
         Request_Note: createFormData.Request_Note,
         Payment_Status: createFormData.Payment_Status,
+        Payee_Location: createFormData.Payee_Location,
+         Client:clientId
       };
       if (agentId) {
         data.Agent = agentId;
@@ -787,15 +1324,20 @@ function Acconts() {
       let fetchedRecord = null;
       try {
         const newRecordId = response?.data?.ID || response?.data?.id;
-        if (newRecordId && dataModule?.getRecords) {
-          const recordResponse = await dataModule.getRecords({
-            report_name: PAYMENT_REQUEST_REPORT_NAME,
-            criteria: `(ID == ${newRecordId})`,
-            page: 1,
-          });
-          const record = recordResponse?.data?.[0];
-          if (record) {
-            fetchedRecord = prepareRequestRecord(record);
+        if (dataModule?.getRecords) {
+          const criteria = newRecordId
+            ? buildEqualityCriteria("ID", newRecordId)
+            : buildEqualityCriteria("Client", clientId);
+          if (criteria) {
+            const recordResponse = await dataModule.getRecords({
+              report_name: PAYMENT_REQUEST_REPORT_NAME,
+              criteria,
+              page: 1,
+            });
+            const record = recordResponse?.data?.[0];
+            if (record) {
+              fetchedRecord = prepareRequestRecord(record);
+            }
           }
         }
       } catch (fetchError) {
@@ -827,13 +1369,14 @@ function Acconts() {
     if (!request) return;
     const todayIso = new Date().toISOString().slice(0, 10);
     setActiveReceiptRequest(request);
+    setReceiptUploadFile(null);
     setReceiptFormData({
       Payment_Request: request.ID, 
       Payment_Request_ID: request.Payment_Request_ID,
       Received_Date: todayIso,
       Received_Amount: "",
-      Payment_Mode: "",
-      Payment_Reference: "",
+      Payment_Mode: "Bank Transfer",
+      Note: "",
       Client_ID:request?.Client?.ID,
       Reconciliation1:false
     });
@@ -849,6 +1392,7 @@ function Acconts() {
     setReceiptSaveStatus(null);
     setIsReceiptSaving(false);
     setActiveReceiptRequest(null);
+    setReceiptUploadFile(null);
   };
 
   const handleReceiptInputChange = (field, value) => {
@@ -856,6 +1400,389 @@ function Acconts() {
       ...prev,
       [field]: value,
     }));
+  };
+
+  const handleReceiptFileChange = useCallback((file) => {
+    setReceiptUploadFile(file);
+    setReceiptFormData((prev) =>
+      prev
+        ? {
+            ...prev,
+            Attachment: file ? file.name : "",
+          }
+        : prev
+    );
+  }, []);
+
+  const resolvePaymentRequestTemplate = (templates = emailTemplates) => {
+    if (!templates.length) {
+      return null;
+    }
+    const targetName = "payment request";
+    return (
+      templates.find((template) => {
+        const templateName =
+          template?.Template_Name ||
+          template?.Template ||
+          template?.Name ||
+          "";
+        return templateName.toString().toLowerCase().includes(targetName);
+      }) || null
+    );
+  };
+
+  const openEmailModal = async (request) => {
+    if (!request) return;
+    let templates = emailTemplates;
+    if (!templates.length) {
+      templates = (await loadEmailTemplates()) || [];
+    }
+    const assignedAgent = normalizeAgentRecord(request.Agent || request.Agent_ID);
+    const clientName = getClientDisplayName(request);
+
+    const defaultTemplate = resolvePaymentRequestTemplate(templates);
+    const templateSubject =
+      defaultTemplate?.Subject ||
+      defaultTemplate?.Template_Subject ||
+      defaultTemplate?.Subject_field ||
+      defaultTemplate?.Template_Name ||
+      "";
+    const subject =
+      templateSubject ||
+      (request.Payment_Request_ID
+        ? `Payment Request ${request.Payment_Request_ID}`
+        : "Payment Request Details");
+    const templateContent =
+      defaultTemplate?.Email_Content ||
+      defaultTemplate?.Template_Content ||
+      "";
+
+    const resolvedClientFirstName =
+      clientDetails?.Name_of_Client1?.first_name ||
+      clientDetails?.Name_of_Client?.first_name ||
+      request?.Client?.Name_of_Client1?.first_name ||
+      request?.Client?.Name_of_Client?.first_name ||
+      request?.Client_Name ||
+      clientName ||
+      "";
+    const resolvedClientId =
+      clientDetails?.Client_ID ||
+      clientDetails?.Clientid ||
+      clientDetails?.ID ||
+      request?.Client?.Client_ID ||
+      request?.Client?.Clientid ||
+      request?.Client?.ID ||
+      getRequestClientIdentifier(request) ||
+      "";
+    const resolvedServiceName =
+      serviceDetails?.Select_Service?.Service ||
+      serviceDetails?.Service?.zc_display_value ||
+      serviceDetails?.Service ||
+      request?.Service_Name ||
+      request?.Service ||
+      "";
+    const agentEmailFromOptions =
+      agentOptions.find(
+        (agent) =>
+          agent.__optionId === normalizeRecordId(request.Agent_ID) &&
+          agent.Login_Email_Address
+      )?.Login_Email_Address || "";
+      
+    const stripePaymentUrl = ensureAbsoluteUrl(
+      await fetchStripeIntegrationUrl(request)
+    );
+    
+     console.log("stripePaymentUrl111" + stripePaymentUrl);
+    let resolvedContent = templateContent || "";
+    if (resolvedContent) {
+      resolvedContent = resolvedContent.replace(
+        /\{NAME\}/gi,
+        resolvedClientFirstName
+      );
+      resolvedContent = resolvedContent.replace(
+        /\{Requested Amount\}/gi,
+        request?.Requested_Amount !== undefined &&
+          request?.Requested_Amount !== null
+          ? String(request.Requested_Amount)
+          : ""
+      );
+       resolvedContent = resolvedContent.replace(
+        /\{Request Note\}/gi,
+        request?.Requested_Amount !== undefined &&
+          request?.Requested_Amount !== null
+          ? String(request.Request_Note)
+          : "" )
+      resolvedContent = resolvedContent.replace(
+        /\{Client ID\}/gi,
+        resolvedClientId
+      );
+      resolvedContent = resolvedContent.replace(
+        /\{Agent ID\}/gi,
+        agentEmailFromOptions ||
+          (request?.Requested_Amount !== undefined &&
+          request?.Requested_Amount !== null
+            ? String(request.Agent_ID)
+            : "")
+      );
+      resolvedContent = resolvedContent.replace(
+        /\{Service\}/gi,
+        resolvedServiceName
+      );
+      if (stripePaymentUrl) {
+        const escapedPlaceholder = STRIPE_LINK_PLACEHOLDER.replace(
+          /[.*+?^${}()|[\]\\]/g,
+          "\\$&"
+        );
+       
+        
+        const anchorHtml = `<a href="${stripePaymentUrl}" target="_blank" rel="noopener noreferrer">${STRIPE_CTA_TEXT}</a>`;
+        let replacedCta = false;
+        const hrefDouble = new RegExp(
+          `href="${escapedPlaceholder}"`,
+          "gi"
+        );
+        const hrefSingle = new RegExp(
+          `href='${escapedPlaceholder}'`,
+          "gi"
+        );
+        if (hrefDouble.test(resolvedContent) || hrefSingle.test(resolvedContent)) {
+          resolvedContent = resolvedContent
+            .replace(hrefDouble, `href="${stripePaymentUrl}"`)
+            .replace(hrefSingle, `href='${stripePaymentUrl}'`);
+          replacedCta = true;
+        }
+        const escapedText = STRIPE_CTA_TEXT.replace(
+          /[.*+?^${}()|[\]\\]/g,
+          "\\$&"
+        );
+        const ctaAnchorPattern = new RegExp(
+          `<a[^>]*>\\s*${escapedText}\\s*<\\/a>`,
+          "gi"
+        );
+        if (ctaAnchorPattern.test(resolvedContent)) {
+          resolvedContent = resolvedContent.replace(
+            ctaAnchorPattern,
+            anchorHtml
+          );
+          replacedCta = true;
+        }
+        const ctaBlockPattern = new RegExp(
+          "Click here to pay by card[\\s\\S]*?(?=<|$)",
+          "gi"
+        );
+        if (ctaBlockPattern.test(resolvedContent)) {
+          resolvedContent = resolvedContent.replace(ctaBlockPattern, anchorHtml);
+          replacedCta = true;
+        }
+        const lowerContent = resolvedContent.toLowerCase();
+        const marker = "click here to pay by card";
+        const markerIndex = lowerContent.indexOf(marker);
+        if (markerIndex !== -1) {
+          let endIndex = markerIndex;
+          const spanCloseIndex = resolvedContent.indexOf(
+            "</span>",
+            markerIndex
+          );
+          const applyIndex = lowerContent.indexOf("apply)", markerIndex);
+          if (spanCloseIndex !== -1 && spanCloseIndex < applyIndex + 20) {
+            endIndex = spanCloseIndex + "</span>".length;
+          } else if (applyIndex !== -1) {
+            endIndex = applyIndex + "apply)".length;
+          } else {
+            endIndex = markerIndex + marker.length;
+          }
+          const snippet = resolvedContent.slice(markerIndex, endIndex).trim();
+          const wrappedSnippet = `<a href="${stripePaymentUrl}" target="_blank" rel="noopener noreferrer">${snippet}</a>`;
+          resolvedContent =
+            resolvedContent.slice(0, markerIndex) +
+            wrappedSnippet +
+            resolvedContent.slice(endIndex);
+          replacedCta = true;
+        }
+        const ctaTextPattern = new RegExp(escapedText, "gi");
+        if (ctaTextPattern.test(resolvedContent)) {
+          resolvedContent = resolvedContent.replace(
+            ctaTextPattern,
+            anchorHtml
+          );
+          replacedCta = true;
+        }
+        const placeholderRegex = new RegExp(escapedPlaceholder, "g");
+        if (placeholderRegex.test(resolvedContent)) {
+          const fallbackAnchor = `<a href="${stripePaymentUrl}" target="_blank" rel="noopener noreferrer">${stripePaymentUrl}</a>`;
+          resolvedContent = resolvedContent.replace(
+            placeholderRegex,
+            fallbackAnchor
+          );
+          replacedCta = true;
+        }
+        if (!replacedCta) {
+          resolvedContent = `${resolvedContent}<p>${anchorHtml}</p>`;
+        }
+      }
+    }
+    const templateId =
+      defaultTemplate?.ID ||
+      defaultTemplate?.id ||
+      defaultTemplate?.Template_ID ||
+      defaultTemplate?.Templateid ||
+      "";
+
+      
+    setEmailFormData({
+      Payment_Request_ID: request.Payment_Request_ID || "",
+      Request_ID: request.ID || "",
+      Assigned_User: assignedAgent?.__optionId || "",
+      Client_Name: clientName || "",
+      From: agentEmailFromOptions,
+      To: clientDetails?.Email ,
+      Subject: subject.replace(
+        /\{Service\}/gi,
+        resolvedServiceName
+      ),
+      Content: resolvedContent || buildEmailContent(request),
+      CC: "",
+      TemplateId: templateId || "",
+    });
+    setEmailPlaceholderValues({
+      NAME: resolvedClientFirstName,
+      SERVICE: resolvedServiceName,
+      REQUESTED_AMOUNT:
+        request?.Requested_Amount !== undefined &&
+        request?.Requested_Amount !== null
+          ? String(request.Requested_Amount)
+          : "",
+      REQUEST_NOTE:
+        request?.Requested_Amount !== undefined &&
+        request?.Requested_Amount !== null
+          ? String(request.Request_Note || "")
+          : "",
+      CLIENT_ID: resolvedClientId,
+      AGENT_ID:
+        agentEmailFromOptions ||
+        (request?.Requested_Amount !== undefined &&
+        request?.Requested_Amount !== null
+          ? String(request.Agent_ID)
+          : ""),
+    });
+    setEmailError(null);
+    setEmailSending(false);
+    setEmailModalOpen(true);
+  };
+
+  const closeEmailModal = () => {
+    setEmailModalOpen(false);
+    setEmailFormData(null);
+    setEmailError(null);
+    setEmailSending(false);
+  };
+
+  const handleEmailFieldChange = (field, value) => {
+    setEmailFormData((prev) => ({
+      ...(prev || {}),
+      [field]: value,
+    }));
+  };
+
+  const handleSendEmail = async () => {
+    if (!emailFormData) {
+      return;
+    }
+    const toList = parseEmailList(emailFormData.To);
+    if (!emailFormData.From) {
+      setEmailError("From address is required.");
+      return;
+    }
+    if (!toList.length) {
+      setEmailError("Provide at least one recipient email.");
+      return;
+    }
+    if (!emailFormData.Content) {
+      setEmailError("Email content cannot be empty.");
+      return;
+    }
+    setEmailError(null);
+    setEmailSending(true);
+    try {
+      const creator = await ensureZohoReady();
+      const createHandler = resolveCreateHandler(creator);
+      if (!createHandler) {
+        throw new Error("Zoho add API is not available for email logging.");
+      }
+      const sendMailHandler =
+        window.ZOHO?.CREATOR?.UTIL?.sendMail ||
+        creator?.UTIL?.sendMail ||
+        creator?.sendMail ||
+        window.ZOHO?.CREATOR?.API?.sendMail ||
+        creator?.API?.sendMail ||
+        resolveSendMailHandler(creator);
+      // if (typeof sendMailHandler !== "function") {
+      //   throw new Error("Zoho send mail API is unavailable.");
+      // }
+      const ccList = parseEmailList(emailFormData.CC);
+      const subject = emailFormData.Subject || "Payment Request Details";
+      const appName = getAppLinkName() || "knowbal-one";
+      const ccRows = ccList.map((email) => ({ Email: email }));
+      const emailRecordPayload = {
+        Payment_Request: emailFormData.Request_ID || "",
+        Payment_Request_ID: emailFormData.Payment_Request_ID || "",
+        Assigned_User: emailFormData.Assigned_User || "",
+        Client_Name: emailFormData.Client_Name || "",
+        From: emailFormData.From,
+        To: emailFormData.To,
+        CC: ccRows,
+        Subject_field: subject,
+        Content: emailFormData.Content,
+        Client: clientId || "",
+      };
+      const createResponse = await createHandler({
+        app_name: appName,
+        appName,
+        form_name: SEND_EMAIL_FORM_NAME,
+        formName: SEND_EMAIL_FORM_NAME,
+        report_name: SEND_EMAIL_FORM_NAME,
+        reportName: SEND_EMAIL_FORM_NAME,
+        data: emailRecordPayload,
+        payload: { data: emailRecordPayload },
+      });
+      const createErrorMessage = getZohoResponseErrorMessage(createResponse);
+      if (createErrorMessage) {
+        const codeLabel =
+          createResponse?.code !== undefined ? ` (code ${createResponse.code})` : "";
+        setEmailError(`Unable to send email${codeLabel}: ${createErrorMessage}`);
+        return;
+      }
+      const requestConfig = {
+        from_mail_id: emailFormData.From,
+        fromAddress: emailFormData.From,
+        to_mail_ids: toList,
+        toAddress: toList.join(","),
+        cc_mail_ids: ccList,
+        ccAddress: ccList.join(","),
+        subject,
+        message: emailFormData.Content,
+        content: emailFormData.Content,
+      };
+      if (typeof sendMailHandler === "function") {
+        const sendResponse = await sendMailHandler(requestConfig);
+        const sendErrorMessage = getZohoResponseErrorMessage(sendResponse);
+        if (sendErrorMessage) {
+          const codeLabel =
+            sendResponse?.code !== undefined ? ` (code ${sendResponse.code})` : "";
+          setEmailError(`Unable to send email${codeLabel}: ${sendErrorMessage}`);
+          return;
+        }
+      } else {
+        console.warn(
+          "Zoho send mail API unavailable; proceeding with saved email record."
+        );
+      }
+      closeEmailModal();
+    } catch (err) {
+      setEmailError(err?.message || "Unable to send email.");
+    } finally {
+      setEmailSending(false);
+    }
   };
 
   const getReceiptParentRequest = () => {
@@ -949,16 +1876,13 @@ function Acconts() {
       }
       const appName = getAppLinkName() || "knowbal-one";
       const data = {
-
-     
         Received_Date: formatDateForZoho(receiptFormData.Received_Date),
         Amount_Received: normalizedAmount,
         Payment_Mode:receiptFormData.Payment_Mode,
         Payment_Request: receiptFormData.Payment_Request,
         Client_ID: receiptFormData.Client_ID,
-        Payment_Reference: receiptFormData.Payment_Reference,
+        Note: receiptFormData.Note,
         Un_Utilised_Amount:normalizedAmount
- 
       };
       const config = {
         app_name: appName,
@@ -979,6 +1903,20 @@ function Acconts() {
         throw new Error(errorMessage);
       }
       setReceiptSaveStatus("success");
+      const newRecordId = response?.data?.ID || response?.data?.id;
+      if (newRecordId && receiptUploadFile) {
+        try {
+          await uploadPaymentReceiptAttachment({
+            recordId: newRecordId,
+            file: receiptUploadFile,
+          });
+        } catch (uploadError) {
+          console.warn(
+            "Unable to upload payment receipt attachment",
+            uploadError
+          );
+        }
+      }
       const createdRecord = {
         ...data,
         ...response?.data,
@@ -986,7 +1924,7 @@ function Acconts() {
           receiptFormData.Payment_Request_ID ??
           response?.data?.Payment_Request_ID,
         Received_Amount: normalizedAmount,
-        Payment_Reference: receiptFormData.Payment_Reference,
+        Note: receiptFormData.Note,
       };
       setPaymentReceipts((prev) => [createdRecord, ...prev]);
       if (parentRequest?.ID && updatedRequestTotal !== null) {
@@ -1068,6 +2006,7 @@ function Acconts() {
             : prev
         );
       }
+      await loadPaymentReceipts({ forceRefresh: true });
       closeReceiptForm();
     } catch (error) {
       setReceiptError(error.message || "Unable to add payment receipt.");
@@ -1077,100 +2016,209 @@ function Acconts() {
     }
   };
 
+  useEffect(() => {
+    const normalizedClientId = normalizeRecordId(clientId);
+    if (!normalizedClientId) {
+      setPaymentRequests([]);
+      paymentRequestFetchStateRef.current = {
+        clientId: null,
+        loading: false,
+        loaded: false,
+      };
+      return;
+    }
 
+    const fetchState = paymentRequestFetchStateRef.current;
+    if (
+      fetchState.clientId === normalizedClientId &&
+      (fetchState.loading || fetchState.loaded)
+    ) {
+      return;
+    }
 
-    useEffect(() => {
-      const initWidget = async () => {
-        try {
-          const creator = await ensureZohoReady();
-        
-          const dataModule = getCreatorModule(creator, "DATA");
-          if (!dataModule?.getRecords) {
-            throw new Error("Zoho DATA.getRecords API unavailable.");
-          }
-          const paymentRequestResponse = await dataModule.getRecords({
-            report_name: PAYMENT_REQUEST_REPORT_NAME,
-          });
-          if (paymentRequestResponse && paymentRequestResponse.data) {
-            const preparedRequests = paymentRequestResponse.data.map(
-              (record) => prepareRequestRecord(record) || record
-            );
-            setPaymentRequests(preparedRequests);
-          }
+    paymentRequestFetchStateRef.current = {
+      clientId: normalizedClientId,
+      loading: true,
+      loaded: false,
+    };
 
-          const PaymentreceiptResponse = await dataModule.getRecords({
-            report_name: PAYMENT_RECEIPT_REPORT_NAME,
-          });
-          if (PaymentreceiptResponse && PaymentreceiptResponse.data) {
-            setPaymentReceipts(PaymentreceiptResponse.data);
-            // console.log(
-            //   "PaymentreceiptResponse",
-            //   PaymentreceiptResponse
-            // );
-          }
-          const PaymentUtilizationResponse = await dataModule.getRecords({
-            report_name: PAYMENT_UTILIZATION_REPORT_NAME,
-          });
-          if (PaymentUtilizationResponse && PaymentUtilizationResponse.data) {
-            setUtilization(PaymentUtilizationResponse.data);
-            // console.log(
-            //   "PaymentUtilizationResponse",
-            //   PaymentUtilizationResponse
-            // );
-          }
-          const usersResponse = await dataModule.getRecords({
-            report_name: USERS_REPORT_NAME,
-          });
-          if (usersResponse && usersResponse.data) {
-            const seenUserIds = new Set();
-            const normalizedUsers = [];
-            usersResponse.data.forEach((user) => {
-              const normalized = normalizeAgentRecord(user);
-              if (normalized && normalized.__optionId && !seenUserIds.has(normalized.__optionId)) {
-                seenUserIds.add(normalized.__optionId);
-                normalizedUsers.push(normalized);
-              }
-            });
-            setAgentOptions(normalizedUsers);
-          }
-        } catch (err) {
-          console.error("Init/Fetch Error:", err);
+    let isMounted = true;
+
+      console.log(isMounted + "3333");
+    const initWidget = async () => {
+      try {
+        const creator = await ensureZohoReady();
+        const dataModule = getCreatorModule(creator, "DATA");
+        if (!dataModule?.getRecords) {
+          throw new Error("Zoho DATA.getRecords API unavailable.");
         }
-      };
-      initWidget();
-      // Resize Handler
-      const handleResize = () => {
-        setViewportHeight(window.innerHeight);
-        setViewportWidth(window.innerWidth);
-      };
-      window.addEventListener("resize", handleResize);
-      return () => window.removeEventListener("resize", handleResize);
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+        let paymentRequestRecords = [];
+        try {
+          const clientCriteriaCandidates =
+            buildClientCriteriaList(normalizedClientId);
+          if (!clientCriteriaCandidates.length) {
+            throw new Error("Unable to resolve client criteria for requests.");
+          }
+          let paymentRequestResponse = null;
+          let lastCriteriaError = null;
+          let encounteredNoRecords = false;
+          for (const clientCriteria of clientCriteriaCandidates) {
+            try {
+              paymentRequestResponse = await callWithRetry(() =>
+                dataModule.getRecords({
+                  report_name: PAYMENT_REQUEST_REPORT_NAME,
+                  criteria: clientCriteria,
+                })
+              );
+              break;
+            } catch (requestError) {
+              if (isNoRecordsError(requestError)) {
+                lastCriteriaError = requestError;
+                encounteredNoRecords = true;
+                continue;
+              }
+              if (isCriteriaError(requestError)) {
+                lastCriteriaError = requestError;
+                continue;
+              }
+              throw requestError;
+            }
+          }
+          if (!paymentRequestResponse) {
+            if (lastCriteriaError && isNoRecordsError(lastCriteriaError)) {
+              encounteredNoRecords = true;
+            } else {
+              throw lastCriteriaError || new Error("Unable to fetch requests.");
+            }
+          }
+          paymentRequestRecords = encounteredNoRecords
+            ? []
+            : paymentRequestResponse?.data ?? [];
+            
+        } catch (requestError) {
+          if (!isNoRecordsError(requestError)) {
+            throw requestError;
+          }
+          paymentRequestRecords = [];
+        }
+        console.log(isMounted + "3333");
+        
 
+          const resolvedRecords = Array.isArray(paymentRequestRecords)
+            ? paymentRequestRecords
+            : Array.isArray(paymentRequestRecords?.data)
+              ? paymentRequestRecords.data
+              : Array.isArray(paymentRequestRecords?.records)
+                ? paymentRequestRecords.records
+                : [];
+          const preparedRequests = resolvedRecords.map(
+            (record) => prepareRequestRecord(record) || record
+          );
+          console.log("paymentRequestRecords3333" + JSON.stringify(preparedRequests));
+          setPaymentRequests(preparedRequests);
+  
+        if (
+          paymentRequestFetchStateRef.current.clientId === normalizedClientId
+        ) {
+          paymentRequestFetchStateRef.current = {
+            clientId: normalizedClientId,
+            loading: false,
+            loaded: true,
+          };
+        }
+      } catch (err) {
+        console.error("Init/Fetch Error:", err);
+        if (
+          paymentRequestFetchStateRef.current.clientId === normalizedClientId
+        ) {
+          paymentRequestFetchStateRef.current = {
+            clientId: null,
+            loading: false,
+            loaded: false,
+          };
+        }
+      }
+    };
+    initWidget();
+    return () => {
+      isMounted = false;
+    };
+  }, [clientId, ensureZohoReady, prepareRequestRecord]);
+
+  useEffect(() => {
+    if ((selectedRequest || expandedRequestId) && !paymentReceiptsLoaded) {
+      loadPaymentReceipts().catch((err) =>
+        console.warn("Unable to load payment receipts", err)
+      );
+    }
+  }, [
+    expandedRequestId,
+    loadPaymentReceipts,
+    paymentReceiptsLoaded,
+    selectedRequest,
+  ]);
+
+  useEffect(() => {
+    if (agentsFetchedRef.current) {
+      return;
+    }
+    agentsFetchedRef.current = true;
+    let isMounted = true;
+    const fetchActiveAgents = async () => {
+      try {
+        const creator = await ensureZohoReady();
+        const dataModule = getCreatorModule(creator, "DATA");
+        if (!dataModule?.getRecords) {
+          throw new Error("Zoho DATA.getRecords API unavailable.");
+        }
+        const usersResponse = await dataModule.getRecords({
+          report_name: USERS_REPORT_NAME,
+          criteria: '(Status == "Active")',
+        });
+        if (isMounted && usersResponse?.data) {
+          const seenUserIds = new Set();
+          const normalizedUsers = [];
+          usersResponse.data.forEach((user) => {
+            const normalized = normalizeAgentRecord(user);
+            if (
+              normalized &&
+              normalized.__optionId &&
+              !seenUserIds.has(normalized.__optionId)
+            ) {
+              seenUserIds.add(normalized.__optionId);
+              normalizedUsers.push(normalized);
+            }
+          });
+          setAgentOptions(normalizedUsers);
+        }
+      } catch (err) {
+        console.warn("Unable to fetch active users", err);
+        if (isMounted) {
+          setAgentOptions([]);
+        }
+      }
+    };
+    fetchActiveAgents();
+    return () => {
+      isMounted = false;
+    };
+  }, [ensureZohoReady, normalizeAgentRecord]);
+
+      // console.log("agentOptions" + agentOptions);
 return (
   <div className="container py-4">
     <header className="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4">
       <div>
-        <p className="text-uppercase text-muted mb-1">Finance Overview</p>
-        <h1 className="h3 fw-bold mb-2">Accounts Dashboard</h1>
-        <p className="text-muted mb-0">
-          Monitor payment requests and utilization in one place.
-        </p>
-      </div>
-      <div className="text-md-end mt-3 mt-md-0">
-        <p className="text-muted mb-1">Viewport</p>
-        <span className="badge text-bg-light">
-          {viewportWidth} × {viewportHeight}
-        </span>
+        
+        <h1 className="h6 fw-bold mb-2">Payment requests </h1>
       </div>
     </header>
 
     <PaymentRequestsSection
-      paymentRequests={filteredPaymentRequests}
-      requestSearch={requestSearch}
-      onSearchChange={setRequestSearch} 
+      paymentRequests={paymentRequests}
       onAddRequest={openCreateForm}
       onUpdateRequest={handleRequestRowClick}
+      onEmailRequest={openEmailModal}
       onMarkReceived={openReceiptForm}
       expandedRequestId={expandedRequestId}
       onToggleRequest={toggleRequestReceipts}
@@ -1215,7 +2263,23 @@ return (
       isSaving={isReceiptSaving}
       error={receiptError}
       saveStatus={receiptSaveStatus}
+      uploadFile={receiptUploadFile}
+      onFileChange={handleReceiptFileChange}
     />
+    <Suspense fallback={null}>
+      <PaymentRequestEmailModal
+        isOpen={isEmailModalOpen}
+        formData={emailFormData || {}}
+        agentOptions={agentOptions}
+        emailTemplates={emailTemplates}
+        placeholderValues={emailPlaceholderValues || {}}
+        onChange={handleEmailFieldChange}
+        onClose={closeEmailModal}
+        onSend={handleSendEmail}
+        isSending={isEmailSending}
+        error={emailError}
+      />
+    </Suspense>
   </div>
 );
 }

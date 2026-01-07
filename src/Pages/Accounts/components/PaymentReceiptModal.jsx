@@ -10,6 +10,8 @@ function PaymentReceiptModal({
   isSaving,
   error,
   saveStatus,
+  uploadFile = null,
+  onFileChange = () => {},
 }) {
   if (!isOpen || !formData) {
     return null;
@@ -83,19 +85,48 @@ function PaymentReceiptModal({
                 </select>
               </div>
               <div className="col-12">
-                <label className="form-label">Notes</label>
+                <label className="form-label">Received Notes</label>
                 {/* <input
                   type="text"
                   className="form-control"
-                  value={formData.Payment_Reference || ""}
-                  onChange={(e) => onChange("Payment_Reference", e.target.value)}
+                  value={formData.Note || ""}
+                  onChange={(e) => onChange("Note", e.target.value)}
                 /> */}
                  <textarea
                   className="form-control"
                   rows="4" 
-                  value={formData.Payment_Reference || ""}
-                  onChange={(e) => onChange("Payment_Reference", e.target.value)}
+                  value={formData.Note || ""}
+                  onChange={(e) => onChange("Note", e.target.value)}
                 />
+              </div>
+              <div className="col-12">
+                <label className="form-label">Attachment</label>
+                <input
+                  type="file"
+                  className="form-control"
+                  onChange={(e) => onFileChange(e.target.files?.[0] || null)}
+                  disabled={isSaving}
+                />
+                {uploadFile ? (
+                  <div className="d-flex align-items-center justify-content-between mt-2">
+                    <small className="text-muted">
+                      Selected: {uploadFile.name} (
+                      {Math.round(uploadFile.size / 1024)} KB)
+                    </small>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-link text-decoration-none"
+                      onClick={() => onFileChange(null)}
+                      disabled={isSaving}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <small className="text-muted">
+                    Upload receipts or supporting documents for this payment.
+                  </small>
+                )}
               </div>
             </form>
           </div>

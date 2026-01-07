@@ -28,6 +28,8 @@ function PaymentReceiptsTable({
               <th>Date</th>
               <th>Amount</th>
               <th>Mode</th>
+              <th>Un Utilized</th>
+              <th>Bank RECO</th>
               <th>Notes</th>
             </tr>
           </thead>
@@ -38,7 +40,9 @@ function PaymentReceiptsTable({
                 receiptDate,
                 receiptNumber,
                 receiptMode,
-                receiptReference,
+                unUtilizedAmount,
+                receiptReconcilation,
+                receiptNote,
               } = getReceiptMeta(receipt);
               const rowKey =
                 receipt.ID ||
@@ -51,7 +55,9 @@ function PaymentReceiptsTable({
                   <td>{receiptDate}</td>
                   <td>{formatCurrency(receiptAmount)}</td>
                   <td>{receiptMode}</td>
-                  <td>{receiptReference}</td>
+                   <td>{unUtilizedAmount}</td>
+                  <td>{receiptReconcilation}</td>
+                  <td>{receiptNote}</td>
                 </tr>
               );
             })}
