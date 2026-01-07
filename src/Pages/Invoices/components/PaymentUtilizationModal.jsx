@@ -25,6 +25,8 @@ const PaymentUtilizationModal = ({
     }
   };
 
+  console.log("7777" + JSON.stringify(paymentReceiptOptions));
+  
   const invoiceLabel =
     formData.Invoice_Number_Label ||
     invoice?.Invoice_Number ||
@@ -32,7 +34,7 @@ const PaymentUtilizationModal = ({
     "";
 
   const clientLabel =
-    formData.Client_ID ||
+    formData.Client ||
     invoice?.Client?.Client_ID ||
     invoice?.Client?.zc_display_value ||
     invoice?.Billing_Name ||
@@ -78,10 +80,10 @@ const PaymentUtilizationModal = ({
                 <input
                   type="text"
                   className="form-control"
-                  value={formData.Client_ID || clientLabel || ""}
-                  onChange={(e) => onFieldChange("Client_ID", e.target.value)}
+                  value={formData.Client || clientLabel || ""}
+                  onChange={(e) => onFieldChange("Client", e.target.value)}
                   placeholder="Enter client identifier"
-                  disabled={isSaving}
+                  disabled
                 />
               </div>
               <div className="col-md-6">
@@ -116,7 +118,7 @@ const PaymentUtilizationModal = ({
                   <option value="">Select payment receipt</option>
                   {paymentReceiptOptions.map((receipt) => (
                     <option key={receipt.value} value={receipt.value}>
-                      {receipt.label}
+                      {receipt.label} - {receipt.amount}
                     </option>
                   ))}
                 </select>
@@ -134,7 +136,7 @@ const PaymentUtilizationModal = ({
                     }
                     step="0.01"
                     min="0"
-                    disabled={isSaving}
+                    disabled
                   />
                 </div>
               </div>
@@ -186,6 +188,7 @@ const PaymentUtilizationModal = ({
                     className="form-control"
                     value={formData.Total_Utilized_Amount || ""}
                     readOnly
+                    disabled
                   />
                 </div>
               </div>

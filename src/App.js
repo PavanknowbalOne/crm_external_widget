@@ -1,13 +1,20 @@
-import './App.css';
-import Acconts from './Pages/Accounts/Acconts';
-import Invoices from './Pages/Invoices/Invoices';
+import "./App.css";
+import React, { Suspense } from "react";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+
+const AccountsModule = React.lazy(() =>
+  import("./Pages/Accounts/AccountsModule")
+);
 
 function App() {
   return (
-    <div className="App">
-      <Acconts />
-     <Invoices />
-    </div>
+    <BrowserRouter>
+      <Suspense fallback={<div>Loading...</div>}>
+        <Routes>
+          <Route path="/AccountsModule" element={<AccountsModule />} />
+        </Routes>
+      </Suspense>
+    </BrowserRouter>
   );
 }
 

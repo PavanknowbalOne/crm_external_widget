@@ -31,23 +31,6 @@ function PaymentRequestFormFields({
       </div>
       <div className="col-md-6">
         <label className="form-label">
-          Payment Status <span className="text-danger">*</span>
-        </label>
-        <select
-          className="form-select"
-          value={formData.Payment_Status || ""}
-          onChange={handleFieldChange("Payment_Status")}
-          required
-        >
-          <option value="">Select status</option>
-          <option value="Pending">Pending</option>
-          <option value="Partially Paid">Partially Paid</option>
-          <option value="Paid">Paid</option>
-          <option value="Refunded">Refunded</option>
-        </select>
-      </div>
-      <div className="col-md-6">
-        <label className="form-label">
           Requested Amount <span className="text-danger">*</span>
         </label>
         <input
@@ -74,6 +57,17 @@ function PaymentRequestFormFields({
               {agent.__optionLabel}
             </option>
           ))}
+        </select>
+      </div>
+      <div className="col-md-6">
+        <label className="form-label">Payee Location</label>
+        <select
+          className="form-select"
+          value={formData.Payee_Location || "Australia"}
+          onChange={handleFieldChange("Payee_Location")}
+        >
+          <option value="Australia">Australia</option>
+          <option value="Outside Australia">Outside Australia</option>
         </select>
       </div>
       <div className="col-12">

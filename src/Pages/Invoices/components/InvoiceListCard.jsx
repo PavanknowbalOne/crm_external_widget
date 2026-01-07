@@ -2,8 +2,6 @@ import React from "react";
 import InvoiceUtilizationsPanel from "./InvoiceUtilizationsPanel";
 
 const InvoiceListCard = ({
-  invoiceSearch,
-  onSearchChange,
   filteredInvoices,
   isLoading,
   error,
@@ -18,6 +16,7 @@ const InvoiceListCard = ({
   onRefreshUtilizations = () => {},
   onClearUtilizations = () => {},
   onUtilizeInvoice = () => {},
+  onSendInvoice = () => {},
 }) => {
   const invoiceMatchesSelection = (invoice) => {
     if (!invoice || !selectedUtilizationInvoice) {
@@ -99,29 +98,19 @@ const InvoiceListCard = ({
     <section className="card shadow-sm border-0">
       <div className="card-header d-flex flex-column flex-md-row gap-3 gap-md-0 align-items-md-center justify-content-between bg-white py-3">
         <div>
-          <h2 className="h5 mb-1">All Invoices</h2>
+          {/* <h2 className="h5 mb-1">All Invoices</h2> */}
           <p className="text-muted small mb-0">
             Filter invoices or trigger follow-up actions.
           </p>
         </div>
-        <div className="d-flex gap-2 align-items-center flex-wrap">
-          <input
-            type="search"
-            className="form-control form-control-sm"
-            placeholder="Search invoices..."
-            value={invoiceSearch}
-            onChange={(e) => onSearchChange(e.target.value)}
-          />
-          <button
+        <div className="d-flex gap-2 align-items-center flex-wrap justify-content-end">
+            <button
             type="button"
             className="btn btn-sm btn-primary text-white"
             onClick={onAddInvoice}
           >
             + Add Invoice
           </button>
-          <span className="badge text-bg-secondary">
-            {filteredInvoices.length} shown
-          </span>
         </div>
       </div>
       <div className="table-responsive">
@@ -152,9 +141,14 @@ const InvoiceListCard = ({
             ) : error ? (
               <tr>
                 <td colSpan="7" className="text-center py-4">
-                  <div className="alert alert-danger mb-0" role="alert">
-                    {error}
-                  </div>
+                  {typeof error === "string" &&
+                  error.toLowerCase().includes("no invoices found") ? (
+                    <div className="text-muted fw-semibold">{error}</div>
+                  ) : (
+                    <div className="alert alert-danger mb-0" role="alert">
+                      {error}
+                    </div>
+                  )}
                 </td>
               </tr>
             ) : filteredInvoices && filteredInvoices.length > 0 ? (
@@ -203,7 +197,7 @@ const InvoiceListCard = ({
                             className="btn btn-sm btn-primary text-white"
                             onClick={(e) => {
                               e.stopPropagation();
-                              alert("Send invoice placeholder");
+                              onSendInvoice(invoice);
                             }}
                           >
                             Send Invoice
